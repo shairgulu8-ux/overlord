@@ -2,6 +2,7 @@ import {
     registerUser,
     loginUser,
     getProfile,
+    changePassword as changePasswordService,
     savePhone,
     saveEmail,
     saveAccount,
@@ -21,6 +22,7 @@ import {
     isExpired
 } from "../utils/otp.js";
 
+
 /*
 =========================================
 REGISTER
@@ -32,13 +34,13 @@ export const register = async (req, res) => {
     try {
 
         const {
-
             username,
             email,
             phone,
-            password
-
+            password,
+            invitationCode
         } = req.body;
+
 
         /*
         ============================
@@ -61,6 +63,7 @@ export const register = async (req, res) => {
 
         }
 
+
         const emailError =
             validateEmail(email);
 
@@ -75,6 +78,7 @@ export const register = async (req, res) => {
             });
 
         }
+
 
         const phoneError =
             validatePhone(phone);
@@ -91,6 +95,7 @@ export const register = async (req, res) => {
 
         }
 
+
         const passwordError =
             validatePassword(password);
 
@@ -106,6 +111,27 @@ export const register = async (req, res) => {
 
         }
 
+
+        /*
+        ============================
+        CHECK INVITATION CODE
+        ============================
+        */
+
+        if (!invitationCode?.trim()) {
+
+            return res.status(400).json({
+
+                success: false,
+
+                message:
+                    "Invitation code is required."
+
+            });
+
+        }
+
+
         /*
         ============================
         CHECK VERIFIED EMAIL
@@ -120,6 +146,7 @@ export const register = async (req, res) => {
 
             });
 
+
         if (!otpRecord) {
 
             return res.status(403).json({
@@ -133,6 +160,7 @@ export const register = async (req, res) => {
 
         }
 
+
         if (!otpRecord.verified) {
 
             return res.status(403).json({
@@ -145,6 +173,7 @@ export const register = async (req, res) => {
             });
 
         }
+
 
         if (
 
@@ -163,6 +192,7 @@ export const register = async (req, res) => {
 
             });
 
+
             return res.status(403).json({
 
                 success: false,
@@ -173,6 +203,7 @@ export const register = async (req, res) => {
             });
 
         }
+
 
         /*
         ============================
@@ -189,9 +220,12 @@ export const register = async (req, res) => {
 
                 phone,
 
-                password
+                password,
+
+                invitationCode
 
             });
+
 
         /*
         ============================
@@ -205,6 +239,7 @@ export const register = async (req, res) => {
                 email.toLowerCase()
 
         });
+
 
         /*
         ============================
@@ -257,6 +292,7 @@ export const register = async (req, res) => {
 
     }
 
+
     catch (error) {
 
         console.error(error);
@@ -273,6 +309,8 @@ export const register = async (req, res) => {
     }
 
 };
+
+
 /*
 =========================================
 LOGIN
@@ -284,12 +322,10 @@ export const login = async (req, res) => {
     try {
 
         const {
-
             login,
-
             password
-
         } = req.body;
+
 
         if (!login || !password) {
 
@@ -304,6 +340,15 @@ export const login = async (req, res) => {
 
         }
 
+
+        /*
+        ============================
+        IMPORTANT:
+        Invitation code is NOT required
+        for login.
+        ============================
+        */
+
         const result =
             await loginUser({
 
@@ -312,6 +357,7 @@ export const login = async (req, res) => {
                 password
 
             });
+
 
         return res.status(200).json({
 
@@ -361,6 +407,7 @@ export const login = async (req, res) => {
 
     }
 
+
     catch (error) {
 
         console.error(error);
@@ -377,6 +424,172 @@ export const login = async (req, res) => {
     }
 
 };
+
+
+/*
+=========================================
+CHANGE PASSWORD
+=========================================
+*/
+
+export const changePassword = async (req, res) => {
+
+    try {
+
+        const {
+            previousPassword,
+            newPassword,
+            confirmPassword
+        } = req.body;
+
+
+        /*
+        ============================
+        CHECK REQUIRED FIELDS
+        ============================
+        */
+
+        if (
+            !previousPassword ||
+            !newPassword ||
+            !confirmPassword
+        ) {
+
+            return res.status(400).json({
+
+                success: false,
+
+                message:
+                    "Previous password, new password and confirm password are required."
+
+            });
+
+        }
+
+
+        /*
+        ============================
+        CONFIRM NEW PASSWORD
+        ============================
+        */
+
+        if (
+            newPassword !==
+            confirmPassword
+        ) {
+
+            return res.status(400).json({
+
+                success: false,
+
+                message:
+                    "New password and confirm password do not match."
+
+            });
+
+        }
+
+
+        /*
+        ============================
+        NEW PASSWORD MUST BE
+        DIFFERENT
+        ============================
+        */
+
+        if (
+            previousPassword ===
+            newPassword
+        ) {
+
+            return res.status(400).json({
+
+                success: false,
+
+                message:
+                    "New password must be different from your previous password."
+
+            });
+
+        }
+
+
+        /*
+        ============================
+        AUTHENTICATED USER
+        ============================
+        */
+
+        if (!req.user?.id) {
+
+            return res.status(401).json({
+
+                success: false,
+
+                message:
+                    "Authentication required."
+
+            });
+
+        }
+
+
+        /*
+        ============================
+        CHANGE PASSWORD
+        ============================
+        */
+
+        await changePasswordService({
+            userId:
+                req.user.id,
+
+            previousPassword,
+
+            newPassword
+        });
+
+
+        /*
+        ============================
+        SUCCESS RESPONSE
+        ============================
+        */
+
+        return res.status(200).json({
+
+            success: true,
+
+            message:
+                "Password changed successfully."
+
+        });
+
+    }
+
+
+    catch (error) {
+
+        console.error(
+            "CHANGE PASSWORD ERROR:",
+            error
+        );
+
+
+        return res.status(400).json({
+
+            success: false,
+
+            message:
+                error.message
+
+        });
+
+    }
+
+};
+
+
 /*
 =========================================
 PROFILE
@@ -388,7 +601,10 @@ export const profile = async (req, res) => {
     try {
 
         const user =
-            await getProfile(req.user.id);
+            await getProfile(
+                req.user.id
+            );
+
 
         return res.status(200).json({
 
@@ -399,6 +615,7 @@ export const profile = async (req, res) => {
         });
 
     }
+
 
     catch (error) {
 
@@ -416,6 +633,8 @@ export const profile = async (req, res) => {
     }
 
 };
+
+
 /*
 =========================================
 SAVE PHONE
@@ -426,9 +645,15 @@ export const savePhoneNumber = async (req, res) => {
 
     try {
 
-        const { phone } = req.body;
+        const {
+            phone,
+            invitationCode
+        } = req.body;
 
-        const phoneError = validatePhone(phone);
+
+        const phoneError =
+            validatePhone(phone);
+
 
         if (phoneError) {
 
@@ -436,41 +661,71 @@ export const savePhoneNumber = async (req, res) => {
 
                 success: false,
 
-                message: phoneError
+                message:
+                    phoneError
 
             });
 
         }
 
+
+        if (!invitationCode?.trim()) {
+
+            return res.status(400).json({
+
+                success: false,
+
+                message:
+                    "Invitation code is required."
+
+            });
+
+        }
+
+
         await savePhone({
 
-            phone
+            phone,
+
+            invitationCode
 
         });
+
 
         return res.status(200).json({
 
             success: true,
 
-            message: "Phone number saved successfully."
+            message:
+                "Phone number saved successfully."
 
         });
 
     }
 
+
     catch (error) {
+
+        console.error(
+            "SAVE PHONE ERROR:",
+            error
+        );
+
 
         return res.status(400).json({
 
             success: false,
 
-            message: error.message
+            message:
+                error.message
 
         });
 
     }
 
 };
+
+
 /*
 =========================================
 SAVE EMAIL
@@ -482,15 +737,14 @@ export const saveUserEmail = async (req, res) => {
     try {
 
         const {
-
             phone,
-
             email
-
         } = req.body;
+
 
         const emailError =
             validateEmail(email);
+
 
         if (emailError) {
 
@@ -498,11 +752,13 @@ export const saveUserEmail = async (req, res) => {
 
                 success: false,
 
-                message: emailError
+                message:
+                    emailError
 
             });
 
         }
+
 
         await saveEmail({
 
@@ -512,15 +768,18 @@ export const saveUserEmail = async (req, res) => {
 
         });
 
+
         return res.status(200).json({
 
             success: true,
 
-            message: "Email saved successfully."
+            message:
+                "Email saved successfully."
 
         });
 
     }
+
 
     catch (error) {
 
@@ -528,13 +787,16 @@ export const saveUserEmail = async (req, res) => {
 
             success: false,
 
-            message: error.message
+            message:
+                error.message
 
         });
 
     }
 
 };
+
+
 /*
 =========================================
 SAVE ACCOUNT
@@ -546,17 +808,22 @@ export const saveUserAccount = async (req, res) => {
     try {
 
         const {
-
             phone,
-
             username,
-
-            password
-
+            password,
+            invitationCode
         } = req.body;
+
+
+        /*
+        ============================
+        USERNAME VALIDATION
+        ============================
+        */
 
         const usernameError =
             validateUsername(username);
+
 
         if (usernameError) {
 
@@ -564,14 +831,23 @@ export const saveUserAccount = async (req, res) => {
 
                 success: false,
 
-                message: usernameError
+                message:
+                    usernameError
 
             });
 
         }
 
+
+        /*
+        ============================
+        PASSWORD VALIDATION
+        ============================
+        */
+
         const passwordError =
             validatePassword(password);
+
 
         if (passwordError) {
 
@@ -579,11 +855,39 @@ export const saveUserAccount = async (req, res) => {
 
                 success: false,
 
-                message: passwordError
+                message:
+                    passwordError
 
             });
 
         }
+
+
+        /*
+        ============================
+        INVITATION CODE VALIDATION
+        ============================
+        */
+
+        if (!invitationCode?.trim()) {
+
+            return res.status(400).json({
+
+                success: false,
+
+                message:
+                    "Invitation code is required."
+
+            });
+
+        }
+
+
+        /*
+        ============================
+        SAVE ACCOUNT
+        ============================
+        */
 
         await saveAccount({
 
@@ -591,19 +895,24 @@ export const saveUserAccount = async (req, res) => {
 
             username,
 
-            password
+            password,
+
+            invitationCode
 
         });
+
 
         return res.status(200).json({
 
             success: true,
 
-            message: "Account details saved."
+            message:
+                "Account details saved."
 
         });
 
     }
+
 
     catch (error) {
 
@@ -611,13 +920,16 @@ export const saveUserAccount = async (req, res) => {
 
             success: false,
 
-            message: error.message
+            message:
+                error.message
 
         });
 
     }
 
 };
+
+
 /*
 =========================================
 COMPLETE REGISTRATION
@@ -629,10 +941,9 @@ export const completeUserRegistration = async (req, res) => {
     try {
 
         const {
-
             phone
-
         } = req.body;
+
 
         const result =
             await completeRegistration({
@@ -641,19 +952,24 @@ export const completeUserRegistration = async (req, res) => {
 
             });
 
+
         return res.status(201).json({
 
             success: true,
 
-            message: "Account created successfully.",
+            message:
+                "Account created successfully.",
 
-            token: result.token,
+            token:
+                result.token,
 
-            user: result.user
+            user:
+                result.user
 
         });
 
     }
+
 
     catch (error) {
 
@@ -661,7 +977,8 @@ export const completeUserRegistration = async (req, res) => {
 
             success: false,
 
-            message: error.message
+            message:
+                error.message
 
         });
 

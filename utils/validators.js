@@ -2,7 +2,7 @@ const emailRegex =
     /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const phoneRegex =
-    /^[6-9]\d{9}$/;
+    /^\+[1-9]\d{7,14}$/;
 
 const usernameRegex =
     /^[a-zA-Z0-9_]{4,20}$/;

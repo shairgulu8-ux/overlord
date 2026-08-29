@@ -22,6 +22,7 @@ import {
 import {
     register,
     login,
+    changePassword,
     profile,
     savePhoneNumber,
     saveUserEmail,
@@ -37,6 +38,7 @@ const router = express.Router();
 
 const EMAIL_REGEX =
     /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 
 /*
 =========================================
@@ -68,6 +70,7 @@ router.post(
 
             }
 
+
             if (!EMAIL_REGEX.test(email)) {
 
                 return res.status(400).json({
@@ -80,14 +83,18 @@ router.post(
 
             }
 
+
             const normalizedEmail =
                 email.toLowerCase().trim();
+
 
             const otp =
                 generateOTP();
 
+
             const expiresAt =
                 getExpiryTime();
+
 
             await OTP.findOneAndUpdate(
 
@@ -125,6 +132,7 @@ router.post(
 
             );
 
+
             await sendOTPEmail(
 
                 normalizedEmail,
@@ -132,6 +140,7 @@ router.post(
                 otp
 
             );
+
 
             return res.status(200).json({
 
@@ -143,6 +152,7 @@ router.post(
             });
 
         }
+
 
         catch (error) {
 
@@ -161,7 +171,9 @@ router.post(
 
     }
 
-); 
+);
+
+
 /*
 =========================================
 VERIFY OTP
@@ -186,6 +198,7 @@ router.post(
 
             } = req.body;
 
+
             if (!email || !otp) {
 
                 return res.status(400).json({
@@ -199,8 +212,10 @@ router.post(
 
             }
 
+
             const normalizedEmail =
                 email.toLowerCase().trim();
+
 
             const record =
                 await OTP.findOne({
@@ -209,6 +224,7 @@ router.post(
                         normalizedEmail
 
                 });
+
 
             if (!record) {
 
@@ -222,6 +238,7 @@ router.post(
                 });
 
             }
+
 
             if (
 
@@ -238,6 +255,7 @@ router.post(
 
                 });
 
+
                 return res.status(400).json({
 
                     success: false,
@@ -248,6 +266,7 @@ router.post(
                 });
 
             }
+
 
             if (record.otp !== otp) {
 
@@ -266,28 +285,33 @@ router.post(
 
             }
 
+
             record.verified = true;
 
             record.verificationExpiresAt =
                 getVerificationExpiry();
 
+
             await record.save();
+
 
             await PendingUser.findOneAndUpdate(
 
                 {
-            
-                    email: normalizedEmail
-            
+
+                    email:
+                        normalizedEmail
+
                 },
-            
+
                 {
-            
+
                     emailVerified: true
-            
+
                 }
-            
+
             );
+
 
             return res.status(200).json({
 
@@ -299,6 +323,7 @@ router.post(
             });
 
         }
+
 
         catch (error) {
 
@@ -318,6 +343,7 @@ router.post(
     }
 
 );
+
 
 /*
 =========================================
@@ -341,6 +367,7 @@ router.post(
 
             } = req.body;
 
+
             if (!email) {
 
                 return res.status(400).json({
@@ -354,14 +381,18 @@ router.post(
 
             }
 
+
             const normalizedEmail =
                 email.toLowerCase().trim();
+
 
             const otp =
                 generateOTP();
 
+
             const expiresAt =
                 getExpiryTime();
+
 
             await OTP.findOneAndUpdate(
 
@@ -399,6 +430,7 @@ router.post(
 
             );
 
+
             await sendOTPEmail(
 
                 normalizedEmail,
@@ -406,6 +438,7 @@ router.post(
                 otp
 
             );
+
 
             return res.status(200).json({
 
@@ -417,6 +450,7 @@ router.post(
             });
 
         }
+
 
         catch (error) {
 
@@ -436,6 +470,8 @@ router.post(
     }
 
 );
+
+
 /*
 =========================================
 REGISTER
@@ -450,6 +486,7 @@ router.post(
 
 );
 
+
 /*
 =========================================
 LOGIN
@@ -463,6 +500,24 @@ router.post(
     login
 
 );
+
+
+/*
+=========================================
+CHANGE PASSWORD
+=========================================
+*/
+
+router.post(
+
+    "/change-password",
+
+    protect,
+
+    changePassword
+
+);
+
 
 /*
 =========================================
@@ -480,6 +535,7 @@ router.get(
 
 );
 
+
 /*
 =========================================
 SAVE PHONE
@@ -493,6 +549,7 @@ router.post(
     savePhoneNumber
 
 );
+
 
 /*
 =========================================
@@ -508,6 +565,7 @@ router.post(
 
 );
 
+
 /*
 =========================================
 SAVE ACCOUNT
@@ -522,6 +580,7 @@ router.post(
 
 );
 
+
 /*
 =========================================
 COMPLETE REGISTRATION
@@ -535,6 +594,7 @@ router.post(
     completeUserRegistration
 
 );
+
 
 /*
 =========================================
@@ -559,6 +619,7 @@ router.get(
     }
 
 );
+
 
 /*
 =========================================

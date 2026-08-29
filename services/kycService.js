@@ -2,108 +2,66 @@ import cloudinary from "../config/cloudinary.js";
 
 import User from "../models/User.js";
 
+
 // ======================================================
 // Constants
 // ======================================================
 
 const KYC_STATUS = {
+
     NOT_STARTED: "not_started",
+
     PENDING: "pending",
+
     APPROVED: "approved",
+
     REJECTED: "rejected",
-};
-
-// ======================================================
-// Validators
-// ======================================================
-
-const aadhaarRegex = /^[2-9]{1}[0-9]{11}$/;
-
-const panRegex = /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/;
-
-// ======================================================
-// Validate Aadhaar
-// ======================================================
-
-const validateAadhaar = (aadhaarNumber) => {
-
-    if (!aadhaarRegex.test(aadhaarNumber)) {
-
-        throw new Error("Invalid Aadhaar number.");
-
-    }
 
 };
 
-// ======================================================
-// Validate PAN
-// ======================================================
-
-const validatePan = (panNumber) => {
-
-    const formattedPan = panNumber.toUpperCase();
-
-    if (!panRegex.test(formattedPan)) {
-
-        throw new Error("Invalid PAN number.");
-
-    }
-
-    return formattedPan;
-
-};
 
 // ======================================================
-// Validate DOB
+// Validate ID Number
 // ======================================================
 
-const validateDob = (dob) => {
+const validateIdNumber = (idNumber) => {
 
-    const birthDate = new Date(dob);
+    const value =
+        idNumber?.trim();
 
-    if (Number.isNaN(birthDate.getTime())) {
 
-        throw new Error("Invalid date of birth.");
-
-    }
-
-    const today = new Date();
-
-    let age =
-        today.getFullYear() -
-        birthDate.getFullYear();
-
-    const monthDifference =
-        today.getMonth() -
-        birthDate.getMonth();
-
-    if (
-        monthDifference < 0 ||
-        (
-            monthDifference === 0 &&
-            today.getDate() < birthDate.getDate()
-        )
-    ) {
-
-        age--;
-
-    }
-
-    if (age < 18) {
+    if (!value) {
 
         throw new Error(
-            "You must be at least 18 years old."
+            "ID number is required."
         );
 
     }
 
-    return birthDate;
+
+    /*
+    Allow a general government/document ID format.
+    Letters, numbers, spaces and hyphens are allowed.
+    */
+
+    const idRegex =
+        /^[A-Za-z0-9][A-Za-z0-9\s-]{3,29}$/;
+
+
+    if (!idRegex.test(value)) {
+
+        throw new Error(
+            "Invalid ID number."
+        );
+
+    }
+
+
+    return value;
 
 };
 
-// ======================================================
-// Delete File Safely
-// ======================================================
+
 // ======================================================
 // Delete Old KYC Images
 // ======================================================
@@ -112,35 +70,55 @@ const deleteOldKycFiles = async (user) => {
 
     if (!user?.kyc) return;
 
+
     const urls = [
 
-        user.kyc.aadhaarFront,
+        user.kyc.idFront,
 
-        user.kyc.aadhaarBack,
-
-        user.kyc.panImage,
+        user.kyc.idBack,
 
     ];
+
 
     for (const url of urls) {
 
         if (!url) continue;
 
-        if (!url.startsWith("https://")) continue;
+
+        if (
+            typeof url !== "string"
+        ) {
+            continue;
+        }
+
+
+        if (
+            !url.startsWith(
+                "https://"
+            )
+        ) {
+            continue;
+        }
+
 
         try {
 
-            const match = url.match(
-                /\/upload\/(?:v\d+\/)?(.+)\.[^.]+$/
-            );
+            const match =
+                url.match(
+                    /\/upload\/(?:v\d+\/)?(.+)\.[^.]+$/
+                );
+
 
             if (!match) continue;
+
 
             await cloudinary.uploader.destroy(
                 match[1]
             );
 
-        } catch (error) {
+        }
+
+        catch (error) {
 
             console.error(
                 "Cloudinary delete failed:",
@@ -152,125 +130,153 @@ const deleteOldKycFiles = async (user) => {
     }
 
 };
+
+
 // ======================================================
 // Submit KYC
 // ======================================================
 
 export const submitKyc = async (
+
     userId,
+
     body,
+
     files
+
 ) => {
 
-    const user = await User.findById(userId);
+    const user =
+        await User.findById(
+            userId
+        );
+
 
     if (!user) {
-        throw new Error("User not found.");
+
+        throw new Error(
+            "User not found."
+        );
+
     }
+
 
     // ==========================================
     // Prevent Duplicate Submission
     // ==========================================
 
     if (
-        user.kyc?.status === KYC_STATUS.PENDING
+        user.kyc?.status ===
+        KYC_STATUS.PENDING
     ) {
+
         throw new Error(
             "Your KYC verification is already under review."
         );
+
     }
 
+
     if (
-        user.kyc?.status === KYC_STATUS.APPROVED
+        user.kyc?.status ===
+        KYC_STATUS.APPROVED
     ) {
+
         throw new Error(
             "Your KYC has already been approved."
         );
+
     }
+
 
     // ==========================================
     // Request Body
     // ==========================================
 
     const {
+
         fullName,
-        dob,
-        aadhaarNumber,
-        panNumber,
-    } = body;
+
+        idNumber,
+
+    } = body || {};
+
 
     // ==========================================
     // Required Fields
     // ==========================================
 
-    // ==========================================
-    // Required Fields
-    // ==========================================
+    if (
+        !fullName ||
+        !fullName.trim()
+    ) {
 
-    if (!fullName || !dob) {
-        throw new Error("Full name and Date of Birth are required.");
-    }
-
-    const hasAadhaar =
-        aadhaarNumber?.trim();
-
-    const hasPan =
-        panNumber?.trim();
-
-    if (!hasAadhaar && !hasPan) {
         throw new Error(
-            "Please provide either Aadhaar or PAN details."
+            "Full name is required."
         );
+
     }
+
+
+    if (
+        !idNumber ||
+        !idNumber.trim()
+    ) {
+
+        throw new Error(
+            "ID number is required."
+        );
+
+    }
+
 
     // ==========================================
     // Uploaded Files
     // ==========================================
 
-    const aadhaarFront =
-        files?.aadhaarFront?.[0];
+    const idFront =
+        files?.idFront?.[0];
 
-    const aadhaarBack =
-        files?.aadhaarBack?.[0];
 
-    const panImage =
-        files?.panImage?.[0];
+    const idBack =
+        files?.idBack?.[0];
 
-    const hasValidAadhaar =
-        hasAadhaar &&
-        aadhaarFront &&
-        aadhaarBack;
 
-    const hasValidPan =
-        hasPan &&
-        panImage;
+    // ==========================================
+    // Validate Uploaded Files
+    // ==========================================
 
-    if (!hasValidAadhaar && !hasValidPan) {
+    if (!idFront) {
+
         throw new Error(
-            "Please complete either Aadhaar or PAN verification."
+            "ID front image is required."
         );
+
     }
+
+
+    if (!idBack) {
+
+        throw new Error(
+            "ID back image is required."
+        );
+
+    }
+
 
     // ==========================================
     // Validate User Data
     // ==========================================
 
-    const birthDate =
-        validateDob(dob);
+    const formattedIdNumber =
+        validateIdNumber(
+            idNumber
+        );
 
-    let formattedPan = null;
-
-    if (hasAadhaar) {
-        validateAadhaar(aadhaarNumber);
-    }
-
-    if (hasPan) {
-        formattedPan =
-            validatePan(panNumber);
-    }
 
     // ==========================================
-    // Delete Old Images (Rejected Users)
+    // Delete Old Images
+    // Rejected Users
     // ==========================================
 
     if (
@@ -278,9 +284,12 @@ export const submitKyc = async (
         KYC_STATUS.REJECTED
     ) {
 
-        await deleteOldKycFiles(user);
+        await deleteOldKycFiles(
+            user
+        );
 
     }
+
 
     // ==========================================
     // Save KYC
@@ -288,41 +297,50 @@ export const submitKyc = async (
 
     user.kyc = {
 
-        status: KYC_STATUS.PENDING,
+        status:
+            KYC_STATUS.PENDING,
 
-        fullName: fullName.trim(),
 
-        dob: birthDate,
+        fullName:
+            fullName.trim(),
 
-        aadhaarNumber: hasAadhaar
-            ? aadhaarNumber.trim()
-            : null,
 
-        panNumber: hasPan
-            ? formattedPan
-            : null,
+        idNumber:
+            formattedIdNumber,
 
-        aadhaarFront: hasValidAadhaar
-            ? aadhaarFront.path
-            : null,
 
-        aadhaarBack: hasValidAadhaar
-            ? aadhaarBack.path
-            : null,
+        idFront:
+            idFront.path,
 
-        panImage: hasValidPan
-            ? panImage.path
-            : null,
 
-        submittedAt: new Date(),
+        idBack:
+            idBack.path,
 
-        approvedAt: null,
 
-        rejectedReason: "",
+        submittedAt:
+            new Date(),
+
+
+        approvedAt:
+            null,
+
+
+        rejectedReason:
+            "",
 
     };
 
+
+    // ==========================================
+    // Save User
+    // ==========================================
+
     await user.save();
+
+
+    // ==========================================
+    // Return
+    // ==========================================
 
     return {
 
@@ -331,188 +349,349 @@ export const submitKyc = async (
         message:
             "KYC submitted successfully.",
 
-        status: user.kyc.status,
+        status:
+            user.kyc.status,
 
     };
 
 };
+
+
 // ======================================================
 // Get Logged-in User KYC
 // ======================================================
 
-export const getMyKyc = async (userId) => {
+export const getMyKyc = async (
+    userId
+) => {
 
-    const user = await User.findById(userId).select("kyc");
+    const user =
+        await User.findById(
+            userId
+        ).select(
+            "kyc"
+        );
+
 
     if (!user) {
-        throw new Error("User not found.");
+
+        throw new Error(
+            "User not found."
+        );
+
     }
 
+
     return {
+
         success: true,
-        kyc: user.kyc || {
-            status: KYC_STATUS.NOT_STARTED,
-        },
+
+        kyc:
+            user.kyc || {
+
+                status:
+                    KYC_STATUS.NOT_STARTED,
+
+            },
+
     };
 
 };
+
 
 // ======================================================
 // Approve KYC
 // ======================================================
 
-export const approveKyc = async (userId) => {
+export const approveKyc = async (
+    userId
+) => {
 
-    const user = await User.findById(userId);
+    const user =
+        await User.findById(
+            userId
+        );
+
 
     if (!user) {
-        throw new Error("User not found.");
+
+        throw new Error(
+            "User not found."
+        );
+
     }
+
 
     if (!user.kyc) {
-        throw new Error("KYC not found.");
+
+        throw new Error(
+            "KYC not found."
+        );
+
     }
 
-    if (user.kyc.status !== KYC_STATUS.PENDING) {
+
+    if (
+        user.kyc.status !==
+        KYC_STATUS.PENDING
+    ) {
+
         throw new Error(
             "Only pending KYC can be approved."
         );
+
     }
 
-    user.kyc.status = KYC_STATUS.APPROVED;
 
-    user.kyc.approvedAt = new Date();
+    user.kyc.status =
+        KYC_STATUS.APPROVED;
 
-    user.kyc.rejectedReason = "";
+
+    user.kyc.approvedAt =
+        new Date();
+
+
+    user.kyc.rejectedReason =
+        "";
+
+
+    /*
+    Keep the existing user's
+    KYC verification flag
+    synchronized.
+    */
+
+    user.isKycVerified =
+        true;
+
 
     await user.save();
+
 
     return {
 
         success: true,
 
-        message: "KYC approved successfully.",
+        message:
+            "KYC approved successfully.",
 
-        status: user.kyc.status,
+        status:
+            user.kyc.status,
 
     };
 
 };
+
 
 // ======================================================
 // Reject KYC
 // ======================================================
 
 export const rejectKyc = async (
+
     userId,
+
     rejectedReason
+
 ) => {
 
-    const user = await User.findById(userId);
+    const user =
+        await User.findById(
+            userId
+        );
+
 
     if (!user) {
-        throw new Error("User not found.");
+
+        throw new Error(
+            "User not found."
+        );
+
     }
+
 
     if (!user.kyc) {
-        throw new Error("KYC not found.");
+
+        throw new Error(
+            "KYC not found."
+        );
+
     }
 
-    if (user.kyc.status !== KYC_STATUS.PENDING) {
+
+    if (
+        user.kyc.status !==
+        KYC_STATUS.PENDING
+    ) {
+
         throw new Error(
             "Only pending KYC can be rejected."
         );
+
     }
 
-    user.kyc.status = KYC_STATUS.REJECTED;
 
-    user.kyc.approvedAt = null;
+    user.kyc.status =
+        KYC_STATUS.REJECTED;
+
+
+    user.kyc.approvedAt =
+        null;
+
 
     user.kyc.rejectedReason =
         rejectedReason?.trim() ||
         "Verification failed.";
 
+
+    /*
+    Make sure rejected KYC
+    is not treated as verified.
+    */
+
+    user.isKycVerified =
+        false;
+
+
     await user.save();
+
 
     return {
 
         success: true,
 
-        message: "KYC rejected successfully.",
+        message:
+            "KYC rejected successfully.",
 
-        status: user.kyc.status,
+        status:
+            user.kyc.status,
 
     };
 
 };
+
+
 // ======================================================
 // Get Pending KYC List
 // ======================================================
 
-export const getPendingKycs = async () => {
+export const getPendingKycs =
+    async () => {
 
-    const users = await User.find({
-        "kyc.status": KYC_STATUS.PENDING,
-    })
-        .select("-password")
-        .sort({
-            "kyc.submittedAt": -1,
-        });
+        const users =
+            await User.find({
 
-    return {
-        success: true,
-        count: users.length,
-        users,
+                "kyc.status":
+                    KYC_STATUS.PENDING,
+
+            })
+                .select(
+                    "-password -password1"
+                )
+                .sort({
+
+                    "kyc.submittedAt":
+                        -1,
+
+                });
+
+
+        return {
+
+            success: true,
+
+            count:
+                users.length,
+
+            users,
+
+        };
+
     };
 
-};
 
 // ======================================================
 // Get Approved KYC List
 // ======================================================
 
-export const getApprovedKycs = async () => {
+export const getApprovedKycs =
+    async () => {
 
-    const users = await User.find({
-        "kyc.status": KYC_STATUS.APPROVED,
-    })
-        .select("-password")
-        .sort({
-            "kyc.approvedAt": -1,
-        });
+        const users =
+            await User.find({
 
-    return {
-        success: true,
-        count: users.length,
-        users,
+                "kyc.status":
+                    KYC_STATUS.APPROVED,
+
+            })
+                .select(
+                    "-password -password1"
+                )
+                .sort({
+
+                    "kyc.approvedAt":
+                        -1,
+
+                });
+
+
+        return {
+
+            success: true,
+
+            count:
+                users.length,
+
+            users,
+
+        };
+
     };
 
-};
 
 // ======================================================
 // Get Rejected KYC List
 // ======================================================
 
-export const getRejectedKycs = async () => {
+export const getRejectedKycs =
+    async () => {
 
-    const users = await User.find({
-        "kyc.status": KYC_STATUS.REJECTED,
-    })
-        .select("-password")
-        .sort({
-            "kyc.submittedAt": -1,
-        });
+        const users =
+            await User.find({
 
-    return {
-        success: true,
-        count: users.length,
-        users,
+                "kyc.status":
+                    KYC_STATUS.REJECTED,
+
+            })
+                .select(
+                    "-password -password1"
+                )
+                .sort({
+
+                    "kyc.submittedAt":
+                        -1,
+
+                });
+
+
+        return {
+
+            success: true,
+
+            count:
+                users.length,
+
+            users,
+
+        };
+
     };
 
-};
 
 // ======================================================
 // Export Status Constants
 // ======================================================
 
-export { KYC_STATUS };
+export {
+    KYC_STATUS
+};

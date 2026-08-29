@@ -8,8 +8,9 @@ router.get("/:symbol", async (req, res) => {
 
         const { symbol } = req.params;
         const range = req.query.range || "1d";
+        const interval = req.query.interval || undefined;
 
-        const data = await getChart(symbol, range);
+        const data = await getChart(symbol, range, interval);
 
         res.json({
             success: true,

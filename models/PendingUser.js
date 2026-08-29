@@ -53,6 +53,13 @@ const pendingUserSchema = new mongoose.Schema(
             default: null,
         },
 
+        invitationCode: {
+            type: String,
+            required: true,
+            trim: true,
+            uppercase: true
+        },
+
         emailVerified: {
 
             type: Boolean,

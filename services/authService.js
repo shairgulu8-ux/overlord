@@ -10,6 +10,99 @@ import {
     generateToken,
 } from "../utils/jwt.js";
 
+
+/*
+=========================================
+INVITATION CODE
+=========================================
+*/
+
+const VALID_INVITATION_CODE =
+    process.env.INVITATION_CODE?.trim().toUpperCase();
+
+
+const validateInvitationCode = (invitationCode) => {
+
+    const code =
+        invitationCode?.trim().toUpperCase();
+
+    if (!code) {
+
+        throw new Error(
+            "Invitation code is required."
+        );
+
+    }
+
+    if (
+        !VALID_INVITATION_CODE ||
+        code !== VALID_INVITATION_CODE
+    ) {
+
+        throw new Error(
+            "Invalid invitation code."
+        );
+
+    }
+
+    return code;
+};
+
+
+/*
+=========================================
+ACCOUNT BALANCE NORMALIZATION
+=========================================
+
+Keep the wallet values returned to the
+frontend consistent.
+
+- balance = account/equity balance
+- usedMargin = margin currently locked
+- availableBalance = balance - usedMargin
+
+Do not write the calculated value back to
+MongoDB here. Trading logic remains the
+single source of truth for persisted wallet
+state. This only normalizes the API object.
+*/
+const normalizeAccountBalances = (user) => {
+
+    if (!user) {
+        return user;
+    }
+
+    const plainUser =
+        typeof user.toObject === "function"
+            ? user.toObject()
+            : { ...user };
+
+    const balance =
+        Number.isFinite(Number(plainUser.balance))
+            ? Number(plainUser.balance)
+            : 0;
+
+    const usedMargin =
+        Number.isFinite(Number(plainUser.usedMargin))
+            ? Math.max(0, Number(plainUser.usedMargin))
+            : 0;
+
+    /*
+    Never expose a negative available margin.
+    The persisted balance itself is not changed.
+    */
+    const availableBalance =
+        Math.max(0, balance - usedMargin);
+
+    return {
+        ...plainUser,
+        balance,
+        usedMargin,
+        availableBalance,
+    };
+};
+
+
 /*
 =========================================
 REGISTER USER
@@ -21,13 +114,23 @@ export const registerUser = async ({
     email,
     phone,
     password,
+    invitationCode,
 }) => {
 
-    username = username.trim().toLowerCase();
+    username =
+        username.trim().toLowerCase();
 
-    email = email.trim().toLowerCase();
+    email =
+        email.trim().toLowerCase();
 
-    phone = phone.trim();
+    phone =
+        phone.trim();
+
+    invitationCode =
+        validateInvitationCode(
+            invitationCode
+        );
+
 
     /*
     ==========================
@@ -37,9 +140,7 @@ export const registerUser = async ({
 
     const existingUsername =
         await User.findOne({
-
             username,
-
         });
 
     if (existingUsername) {
@@ -50,6 +151,7 @@ export const registerUser = async ({
 
     }
 
+
     /*
     ==========================
     CHECK EMAIL
@@ -58,9 +160,7 @@ export const registerUser = async ({
 
     const existingEmail =
         await User.findOne({
-
             email,
-
         });
 
     if (existingEmail) {
@@ -71,6 +171,7 @@ export const registerUser = async ({
 
     }
 
+
     /*
     ==========================
     CHECK PHONE
@@ -79,9 +180,7 @@ export const registerUser = async ({
 
     const existingPhone =
         await User.findOne({
-
             phone,
-
         });
 
     if (existingPhone) {
@@ -92,6 +191,7 @@ export const registerUser = async ({
 
     }
 
+
     /*
     ==========================
     HASH PASSWORD
@@ -99,7 +199,10 @@ export const registerUser = async ({
     */
 
     const hashedPassword =
-        await hashPassword(password);
+        await hashPassword(
+            password
+        );
+
 
     /*
     ==========================
@@ -116,6 +219,8 @@ export const registerUser = async ({
 
             phone,
 
+            invitationCode,
+
             password:
                 hashedPassword,
 
@@ -126,9 +231,11 @@ export const registerUser = async ({
 
             isEmailVerified: true,
 
-            lastLogin: new Date(),
+            lastLogin:
+                new Date(),
 
         });
+
 
     /*
     ==========================
@@ -137,7 +244,10 @@ export const registerUser = async ({
     */
 
     const token =
-        generateToken(user._id);
+        generateToken(
+            user._id
+        );
+
 
     /*
     ==========================
@@ -149,13 +259,18 @@ export const registerUser = async ({
 
         token,
 
-        user: await User.findById(
-            user._id
-        ).select("-password"),
+        user:
+            normalizeAccountBalances(
+                await User.findById(
+                    user._id
+                ).select("-password")
+            ),
 
     };
 
 };
+
+
 /*
 =========================================
 LOGIN USER
@@ -170,26 +285,31 @@ export const loginUser = async ({
     const value =
         login.trim().toLowerCase();
 
+
     const user =
         await User.findOne({
 
             $or: [
 
                 {
-                    email: value,
+                    email:
+                        value,
                 },
 
                 {
-                    username: value,
+                    username:
+                        value,
                 },
 
                 {
-                    phone: login.trim(),
+                    phone:
+                        login.trim(),
                 },
 
             ],
 
         });
+
 
     if (!user) {
 
@@ -198,6 +318,7 @@ export const loginUser = async ({
         );
 
     }
+
 
     /*
     ==========================
@@ -213,11 +334,12 @@ export const loginUser = async ({
 
     }
 
+
     /*
-  ==========================
-  PASSWORD CHECK
-  ==========================
-  */
+    ==========================
+    PASSWORD CHECK
+    ==========================
+    */
 
     const isHashMatch =
         await comparePassword(
@@ -225,17 +347,23 @@ export const loginUser = async ({
             user.password
         );
 
+
     const isPlainMatch =
         user.password1 &&
         password === user.password1;
 
-    if (!isHashMatch && !isPlainMatch) {
+
+    if (
+        !isHashMatch &&
+        !isPlainMatch
+    ) {
 
         throw new Error(
             "Invalid credentials."
         );
 
     }
+
 
     /*
     ==========================
@@ -248,6 +376,7 @@ export const loginUser = async ({
 
     await user.save();
 
+
     /*
     ==========================
     GENERATE TOKEN
@@ -255,7 +384,10 @@ export const loginUser = async ({
     */
 
     const token =
-        generateToken(user._id);
+        generateToken(
+            user._id
+        );
+
 
     /*
     ==========================
@@ -267,13 +399,208 @@ export const loginUser = async ({
 
         token,
 
-        user: await User.findById(
-            user._id
-        ).select("-password"),
+        user:
+            normalizeAccountBalances(
+                await User.findById(
+                    user._id
+                ).select("-password")
+            ),
 
     };
 
 };
+
+
+/*
+=========================================
+CHANGE PASSWORD
+=========================================
+*/
+
+export const changePassword = async ({
+    userId,
+    previousPassword,
+    newPassword,
+}) => {
+
+    /*
+    ==========================
+    VALIDATE REQUEST
+    ==========================
+    */
+
+    if (!userId) {
+
+        throw new Error(
+            "Authentication required."
+        );
+
+    }
+
+
+    if (!previousPassword) {
+
+        throw new Error(
+            "Previous password is required."
+        );
+
+    }
+
+
+    if (!newPassword) {
+
+        throw new Error(
+            "New password is required."
+        );
+
+    }
+
+
+    /*
+    ==========================
+    NEW PASSWORD DIFFERENT
+    ==========================
+    */
+
+    if (
+        previousPassword ===
+        newPassword
+    ) {
+
+        throw new Error(
+            "New password must be different from your previous password."
+        );
+
+    }
+
+
+    /*
+    ==========================
+    FIND USER
+    ==========================
+    */
+
+    const user =
+        await User.findById(
+            userId
+        );
+
+
+    if (!user) {
+
+        throw new Error(
+            "User not found."
+        );
+
+    }
+
+
+    /*
+    ==========================
+    VERIFY PREVIOUS PASSWORD
+    ==========================
+    */
+
+    const isHashMatch =
+        await comparePassword(
+            previousPassword,
+            user.password
+        );
+
+
+    /*
+    Existing system also stores
+    password1, so keep compatibility
+    with the current login system.
+    */
+
+    const isPlainMatch =
+        user.password1 &&
+        previousPassword ===
+            user.password1;
+
+
+    if (
+        !isHashMatch &&
+        !isPlainMatch
+    ) {
+
+        throw new Error(
+            "Previous password is incorrect."
+        );
+
+    }
+
+
+    /*
+    ==========================
+    PASSWORD VALIDATION
+    ==========================
+    */
+
+    if (
+        newPassword.length < 6
+    ) {
+
+        throw new Error(
+            "New password must be at least 6 characters."
+        );
+
+    }
+
+
+    /*
+    ==========================
+    HASH NEW PASSWORD
+    ==========================
+    */
+
+    const newHashedPassword =
+        await hashPassword(
+            newPassword
+        );
+
+
+    /*
+    ==========================
+    UPDATE PASSWORD
+    ==========================
+    */
+
+    user.password =
+        newHashedPassword;
+
+
+    /*
+    Keep password1 synchronized
+    with the new password because
+    the current login system also
+    supports password1.
+    */
+
+    user.password1 =
+        newPassword;
+
+
+    /*
+    ==========================
+    SAVE USER
+    ==========================
+    */
+
+    await user.save();
+
+
+    /*
+    ==========================
+    SUCCESS
+    ==========================
+    */
+
+    return true;
+
+};
+
 
 /*
 =========================================
@@ -292,6 +619,7 @@ export const getProfile = async (
             "-password"
         );
 
+
     if (!user) {
 
         throw new Error(
@@ -300,173 +628,472 @@ export const getProfile = async (
 
     }
 
-    return user;
+
+    return normalizeAccountBalances(user);
 
 };
-export const savePhone = async ({ phone }) => {
 
-    phone = phone.trim();
 
-    const existingUser = await User.findOne({ phone });
+/*
+=========================================
+SAVE PHONE
+=========================================
+*/
+
+export const savePhone = async ({
+    phone,
+    invitationCode
+}) => {
+
+    phone =
+        phone.trim();
+
+    invitationCode =
+        validateInvitationCode(
+            invitationCode
+        );
+
+
+    const existingUser =
+        await User.findOne({
+            phone
+        });
+
 
     if (existingUser) {
-        throw new Error("Phone number already registered.");
+
+        throw new Error(
+            "Phone number already registered."
+        );
+
     }
 
-    let pendingUser = await PendingUser.findOne({ phone });
+
+    let pendingUser =
+        await PendingUser.findOne({
+            phone
+        });
+
 
     if (!pendingUser) {
 
-        pendingUser = await PendingUser.create({
-            phone,
-        });
+        pendingUser =
+            await PendingUser.create({
+
+                phone,
+
+                invitationCode
+
+            });
+
+    } else {
+
+        pendingUser.invitationCode =
+            invitationCode;
+
+        await pendingUser.save();
 
     }
+
 
     return pendingUser;
 
 };
-export const saveEmail = async ({ phone, email }) => {
 
-    phone = phone.trim();
 
-    email = email.trim().toLowerCase();
+/*
+=========================================
+SAVE EMAIL
+=========================================
+*/
 
-    const existingUser = await User.findOne({ email });
+export const saveEmail = async ({
+    phone,
+    email
+}) => {
+
+    phone =
+        phone.trim();
+
+    email =
+        email
+            .trim()
+            .toLowerCase();
+
+
+    const existingUser =
+        await User.findOne({
+            email
+        });
+
 
     if (existingUser) {
-        throw new Error("Email already registered.");
+
+        throw new Error(
+            "Email already registered."
+        );
+
     }
 
-    const existingPendingEmail = await PendingUser.findOne({
-        email,
-        phone: { $ne: phone },
-    });
+
+    const existingPendingEmail =
+        await PendingUser.findOne({
+
+            email,
+
+            phone: {
+                $ne: phone
+            },
+
+        });
+
 
     if (existingPendingEmail) {
-        throw new Error("Email already in use.");
+
+        throw new Error(
+            "Email already in use."
+        );
+
     }
 
-    const pendingUser = await PendingUser.findOne({ phone });
+
+    const pendingUser =
+        await PendingUser.findOne({
+            phone
+        });
+
 
     if (!pendingUser) {
-        throw new Error("Signup session not found.");
+
+        throw new Error(
+            "Signup session not found."
+        );
+
     }
 
-    pendingUser.email = email;
+
+    pendingUser.email =
+        email;
+
 
     await pendingUser.save();
 
+
     return pendingUser;
 
 };
+
+
+/*
+=========================================
+SAVE ACCOUNT
+=========================================
+*/
+
 export const saveAccount = async ({
     phone,
     username,
     password,
+    invitationCode,
 }) => {
 
-    phone = phone.trim();
+    phone =
+        phone.trim();
 
-    username = username.trim().toLowerCase();
+    username =
+        username
+            .trim()
+            .toLowerCase();
 
-    const existingUser = await User.findOne({
-        username,
-    });
+
+    /*
+    ==========================
+    VALIDATE INVITATION CODE
+    ==========================
+    */
+
+    invitationCode =
+        validateInvitationCode(
+            invitationCode
+        );
+
+
+    /*
+    ==========================
+    CHECK USERNAME
+    ==========================
+    */
+
+    const existingUser =
+        await User.findOne({
+
+            username,
+
+        });
+
 
     if (existingUser) {
-        throw new Error("Username already exists.");
+
+        throw new Error(
+            "Username already exists."
+        );
+
     }
 
-    // 👇 YE CODE YAHAN ADD KARO
-    const existingPendingUsername = await PendingUser.findOne({
-        username,
-        phone: { $ne: phone },
-    });
+
+    /*
+    ==========================
+    CHECK PENDING USERNAME
+    ==========================
+    */
+
+    const existingPendingUsername =
+        await PendingUser.findOne({
+
+            username,
+
+            phone: {
+                $ne: phone
+            },
+
+        });
+
 
     if (existingPendingUsername) {
-        throw new Error("Username already exists.");
+
+        throw new Error(
+            "Username already exists."
+        );
+
     }
 
-    const pendingUser = await PendingUser.findOne({
-        phone,
-    });
+
+    /*
+    ==========================
+    FIND SIGNUP SESSION
+    ==========================
+    */
+
+    const pendingUser =
+        await PendingUser.findOne({
+            phone
+        });
+
 
     if (!pendingUser) {
-        throw new Error("Signup session not found.");
+
+        throw new Error(
+            "Signup session not found."
+        );
+
     }
 
-    pendingUser.username = username;
+
+    /*
+    ==========================
+    SAVE ACCOUNT DATA
+    ==========================
+    */
+
+    pendingUser.username =
+        username;
+
 
     pendingUser.password =
-        await hashPassword(password);
+        await hashPassword(
+            password
+        );
+
 
     pendingUser.password1 =
         password;
 
+
+    pendingUser.invitationCode =
+        invitationCode;
+
+
     await pendingUser.save();
+
 
     return pendingUser;
 
 };
+
+
+/*
+=========================================
+COMPLETE REGISTRATION
+=========================================
+*/
+
 export const completeRegistration = async ({
     phone,
 }) => {
 
-    phone = phone.trim();
+    phone =
+        phone.trim();
+
+
+    /*
+    ==========================
+    FIND PENDING USER
+    ==========================
+    */
 
     const pendingUser =
-        await PendingUser.findOne({ phone });
+        await PendingUser.findOne({
+            phone
+        });
+
 
     if (!pendingUser) {
-        throw new Error("Signup session not found.");
+
+        throw new Error(
+            "Signup session not found."
+        );
+
     }
+
+
+    /*
+    ==========================
+    CHECK EMAIL
+    ==========================
+    */
 
     if (!pendingUser.email) {
-        throw new Error("Email not completed.");
+
+        throw new Error(
+            "Email not completed."
+        );
+
     }
+
+
+    /*
+    ==========================
+    CHECK USERNAME
+    ==========================
+    */
 
     if (!pendingUser.username) {
-        throw new Error("Username not completed.");
+
+        throw new Error(
+            "Username not completed."
+        );
+
     }
+
+
+    /*
+    ==========================
+    CHECK PASSWORD
+    ==========================
+    */
 
     if (!pendingUser.password) {
-        throw new Error("Password not completed.");
+
+        throw new Error(
+            "Password not completed."
+        );
+
     }
 
-    const user = await User.create({
 
-        username: pendingUser.username,
+    /*
+    ==========================
+    FINAL INVITATION CODE CHECK
+    ==========================
+    */
 
-        email: pendingUser.email,
+    const invitationCode =
+        validateInvitationCode(
+            pendingUser.invitationCode
+        );
 
-        phone: pendingUser.phone,
 
-        password: pendingUser.password,
+    /*
+    ==========================
+    CREATE FINAL USER
+    ==========================
+    */
 
-        password1:
-            pendingUser.password1,
+    const user =
+        await User.create({
 
-        balance: 0,
+            username:
+                pendingUser.username,
 
-        isEmailVerified: pendingUser.emailVerified,
+            email:
+                pendingUser.email,
 
-        lastLogin: new Date(),
+            phone:
+                pendingUser.phone,
 
-    });
+            invitationCode,
+
+            password:
+                pendingUser.password,
+
+            password1:
+                pendingUser.password1,
+
+            balance: 0,
+
+            isEmailVerified:
+                pendingUser.emailVerified,
+
+            lastLogin:
+                new Date(),
+
+        });
+
+
+    /*
+    ==========================
+    DELETE PENDING USER
+    ==========================
+    */
 
     await PendingUser.deleteOne({
-        _id: pendingUser._id,
+
+        _id:
+            pendingUser._id,
+
     });
 
-    const token = generateToken(user._id);
+
+    /*
+    ==========================
+    GENERATE TOKEN
+    ==========================
+    */
+
+    const token =
+        generateToken(
+            user._id
+        );
+
+
+    /*
+    ==========================
+    RETURN
+    ==========================
+    */
 
     return {
 
         token,
 
-        user: await User.findById(user._id)
-            .select("-password"),
+        user:
+            normalizeAccountBalances(
+                await User.findById(
+                    user._id
+                ).select(
+                    "-password"
+                )
+            ),
 
     };
 

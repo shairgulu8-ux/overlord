@@ -42,7 +42,7 @@ export async function sendOTPEmail(
                 to: email,
 
                 subject:
-                    "Verify your Bobcaps account",
+                    "Verify your Fgtcusd account",
 
                 html: `
 <!DOCTYPE html>
@@ -94,7 +94,7 @@ box-shadow:0 15px 40px rgba(0,0,0,.08);
 
 <td
 style="
-background:#ff7a00;
+background:linear-gradient(135deg,#7aa7ff,#9b7bff);
 padding:28px;
 text-align:center;
 ">
@@ -106,14 +106,14 @@ color:#ffffff;
 font-size:30px;
 ">
 
-Bobcaps
+Fgtcusd
 
 </h1>
 
 <p
 style="
 margin-top:10px;
-color:#fff4eb;
+color:#f0edff;
 font-size:15px;
 ">
 
@@ -161,8 +161,8 @@ to complete your registration.
 <div
 style="
 margin:35px 0;
-background:#fff4eb;
-border:2px dashed #ff7a00;
+background:#f1eeff;
+border:2px dashed #8b5cf6;
 border-radius:14px;
 padding:25px;
 text-align:center;
@@ -173,7 +173,7 @@ style="
 font-size:42px;
 font-weight:bold;
 letter-spacing:12px;
-color:#ff7a00;
+color:#7c3aed;
 ">
 
 ${otp}
@@ -224,7 +224,7 @@ text-align:center;
 ">
 
 This email was sent automatically by
-<strong>Bobcaps</strong>.
+<strong>Fgtcusd</strong>.
 
 Please do not reply to this email.
 
@@ -245,7 +245,7 @@ font-size:12px;
 color:#999;
 ">
 
-© ${new Date().getFullYear()} Bobcaps.
+© ${new Date().getFullYear()} Fgtcusd.
 All rights reserved.
 
 </td>
