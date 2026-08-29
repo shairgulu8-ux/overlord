@@ -42,7 +42,7 @@ export async function sendOTPEmail(
                 to: email,
 
                 subject:
-                    "Verify your Fgtcusd account",
+                    "Verify your GTCFX account",
 
                 html: `
 <!DOCTYPE html>
@@ -106,7 +106,7 @@ color:#ffffff;
 font-size:30px;
 ">
 
-Fgtcusd
+GTCFX
 
 </h1>
 
@@ -224,7 +224,7 @@ text-align:center;
 ">
 
 This email was sent automatically by
-<strong>Fgtcusd</strong>.
+<strong>GTCFX</strong>.
 
 Please do not reply to this email.
 
@@ -245,7 +245,7 @@ font-size:12px;
 color:#999;
 ">
 
-© ${new Date().getFullYear()} Fgtcusd.
+© ${new Date().getFullYear()} GTCFX.
 All rights reserved.
 
 </td>

@@ -105,6 +105,47 @@ const normalizeAccountBalances = (user) => {
 
 /*
 =========================================
+GENERATE UNIQUE 6-DIGIT USER ID
+=========================================
+
+Backend-only generator for the permanent
+User's public-facing userId.
+
+- Always a 6-digit String (100000-999999).
+- Checked against MongoDB for uniqueness.
+- Never derived from email, phone,
+  username, timestamp, password, or _id.
+- Never received from the frontend or
+  req.body.
+*/
+const generateUniqueUserId = async () => {
+
+    let userId;
+    let exists = true;
+
+    while (exists) {
+
+        userId =
+            String(
+                Math.floor(
+                    100000 +
+                    Math.random() * 900000
+                )
+            );
+
+        exists =
+            await User.exists({
+                userId,
+            });
+
+    }
+
+    return userId;
+};
+
+
+/*
+=========================================
 REGISTER USER
 =========================================
 */
@@ -206,6 +247,16 @@ export const registerUser = async ({
 
     /*
     ==========================
+    GENERATE UNIQUE USER ID
+    ==========================
+    */
+
+    const userId =
+        await generateUniqueUserId();
+
+
+    /*
+    ==========================
     CREATE USER
     ==========================
     */
@@ -233,6 +284,8 @@ export const registerUser = async ({
 
             lastLogin:
                 new Date(),
+
+            userId,
 
         });
 
@@ -1015,6 +1068,16 @@ export const completeRegistration = async ({
 
     /*
     ==========================
+    GENERATE UNIQUE USER ID
+    ==========================
+    */
+
+    const userId =
+        await generateUniqueUserId();
+
+
+    /*
+    ==========================
     CREATE FINAL USER
     ==========================
     */
@@ -1046,6 +1109,8 @@ export const completeRegistration = async ({
 
             lastLogin:
                 new Date(),
+
+            userId,
 
         });
 
