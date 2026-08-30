@@ -57,6 +57,30 @@ const marketRequestSchema = new mongoose.Schema(
 
         /*
         |--------------------------------------------------------------------------
+        | User-Facing Order ID
+        |--------------------------------------------------------------------------
+        |
+        | This is an EXTRA display-only identifier shown to the user in the
+        | Market Trade History (e.g. Orders: OR986547292764536793).
+        |
+        | This is NOT a replacement for MongoDB's `_id`.
+        |
+        | - `_id` remains the internal/relational identifier used everywhere
+        |   (Position linking, lookups, etc.) and is never touched.
+        | - `orderId` is only for user-facing display purposes.
+        |
+        | Format: "OR" + 18 random numeric digits.
+        |
+        */
+
+        orderId: {
+            type: String,
+            trim: true,
+            uppercase: true,
+        },
+
+        /*
+        |--------------------------------------------------------------------------
         | Market / Instrument Information
         |--------------------------------------------------------------------------
         */
@@ -580,6 +604,20 @@ marketRequestSchema.index({
     symbol: 1,
     status: 1,
 });
+
+/*
+| Order ID:
+| Unique user-facing identifier used in Market Trade History.
+|
+| `sparse: true` is used so that existing/old documents which do not
+| have an `orderId` (created before this feature) are NOT affected and
+| do NOT break the unique constraint. Only documents that actually have
+| an `orderId` value participate in the uniqueness check.
+*/
+marketRequestSchema.index(
+    { orderId: 1 },
+    { unique: true, sparse: true }
+);
 
 /*
 |--------------------------------------------------------------------------

@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import User from "../models/User.js";
 import Position from "../models/Position.js";
 import MarketRequest from "../models/MarketRequest.js";
@@ -115,6 +116,80 @@ function validateQuantity(quantity) {
     }
 
     return value;
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| Order ID Generator
+|--------------------------------------------------------------------------
+|
+| Generates a display-only, user-facing Order ID.
+|
+| Format:
+|
+| "OR" + 18 random numeric digits.
+|
+| Examples:
+|
+| OR986547292764536793
+| OR274819563920174625
+| OR817364920581736492
+|
+| IMPORTANT:
+|
+| - This is completely separate from MongoDB's `_id`.
+| - `_id` is never replaced, renamed, or removed by this.
+| - `orderId` is only used as an extra display identifier for the user
+|   (e.g. Market Trade History).
+|
+*/
+
+function generateOrderId() {
+    const randomNumber =
+        BigInt(
+            "0x" +
+            crypto
+                .randomBytes(9)
+                .toString("hex")
+        ) % 1000000000000000000n;
+
+    return `OR${randomNumber
+        .toString()
+        .padStart(18, "0")}`;
+}
+
+
+/*
+| generateUniqueOrderId()
+|
+| Wraps generateOrderId() with a database uniqueness check so that,
+| combined with the sparse unique index on `orderId` in the
+| MarketRequest schema, collisions are practically avoided.
+|
+| Collision odds are already astronomically small (18 random digits),
+| but this keeps the create flow safe if one ever occurs.
+*/
+
+async function generateUniqueOrderId() {
+    let orderId = generateOrderId();
+    let attempts = 0;
+
+    while (attempts < 5) {
+        const existing =
+            await MarketRequest.exists({
+                orderId,
+            });
+
+        if (!existing) {
+            return orderId;
+        }
+
+        orderId = generateOrderId();
+        attempts += 1;
+    }
+
+    return orderId;
 }
 
 
@@ -251,7 +326,7 @@ const MAX_LEVERAGE = {
     FOREX: 500,
     METAL: 100,
     OIL: 100,
-    CRYPTO: 50,
+    CRYPTO: 100,
     INDEX: 100,
 };
 
@@ -459,7 +534,12 @@ function calculateFinancials(
     | Existing tradeService currently has zero fee rates for these
     | asset types, so Market trades also use zero fee here.
     */
-    const fee = 0;
+    const FEE_PERCENT = 2;
+
+    const fee =
+        roundNumber(
+            margin * FEE_PERCENT / 100
+        );
 
     return {
         notionalValue,
@@ -877,14 +957,17 @@ function calculateProgressPercent(
 | P&L Amount
 |--------------------------------------------------------------------------
 |
-| P&L percentage is applied to the Market position margin.
+| P&L percentage is applied to the full Market position margin.
 |
 | Example:
 |
 | Margin = $1,000
-| P&L    = +0.30%
+| P&L    = +30%
 |
-| Profit = $3
+| Gross P&L = $300
+|
+| Fee is NOT deducted from the displayed P&L. The 2% margin fee is
+| deducted separately from the wallet at settlement/close.
 |
 */
 
@@ -1045,6 +1128,9 @@ function marketRequestResponse(
     return {
         _id:
             request._id,
+
+        orderId:
+            request.orderId,
 
         userId:
             request.userId,
@@ -1393,6 +1479,9 @@ export async function createMarketRequest({
     |--------------------------------------------------------------------------
     */
 
+    const orderId =
+        await generateUniqueOrderId();
+
     const request =
         await MarketRequest.create({
             userId:
@@ -1400,6 +1489,8 @@ export async function createMarketRequest({
 
             username:
                 user.username,
+
+            orderId,
 
             symbol:
                 normalizedSymbol,
@@ -1507,7 +1598,7 @@ export async function createMarketRequest({
         success: true,
 
         message:
-            "Market request submitted successfully. Waiting for admin to set the trade.",
+            "Market request submitted successfully.",
 
         request:
             marketRequestResponse(
@@ -1606,7 +1697,8 @@ export async function getUserMarketRequests(
             const currentPnl =
                 calculatePnlFromPercent(
                     request.margin,
-                    currentPercent
+                    currentPercent,
+                    request.fee
                 );
 
             /*
@@ -2677,11 +2769,12 @@ export async function lockFinalPercent(
 |
 | Then:
 |
-| profit  → balance + P&L
-| loss    → balance + negative P&L
+| net balance adjustment = final P&L - 2% margin fee
 |
-| Margin itself was never deducted from balance. It was reserved through
-| usedMargin. Once Position closes, usedMargin is released automatically.
+| Margin itself is never deducted from `balance`; it is reserved through
+| `usedMargin`. Once the Position closes, that reserved margin is released
+| automatically. Therefore only the net P&L/fee adjustment is applied to
+| `balance`.
 |
 */
 
@@ -2799,7 +2892,11 @@ export async function settleMarketTrade(
                     status: "SETTLED",
                     finalPercent,
                     finalPnl,
-                    balanceAdjustment: finalPnl,
+                    balanceAdjustment:
+                        roundNumber(
+                            finalPnl -
+                            Number(request.fee || 0)
+                        ),
                     lockedAt:
                         request.lockedAt ||
                         settledAt,
@@ -2866,10 +2963,16 @@ export async function settleMarketTrade(
     const oldBalance =
         getBalance(user);
 
+    const balanceAdjustment =
+        roundNumber(
+            finalPnl -
+            Number(request.fee || 0)
+        );
+
     const newBalance =
         roundNumber(
             oldBalance +
-            finalPnl
+            balanceAdjustment
         );
 
     /*
@@ -2890,7 +2993,7 @@ export async function settleMarketTrade(
                 user.realizedTradingProfit ||
                 0
             ) +
-            finalPnl
+            balanceAdjustment
         );
 
     /*
@@ -3093,6 +3196,51 @@ export async function sellMarketPosition(
         );
 
     /*
+|--------------------------------------------------------------------------
+| Capture LIVE EXIT PRICE
+|--------------------------------------------------------------------------
+|
+| The price shown in History must be the latest market
+| price at the exact time the user presses SELL.
+|
+| This does NOT affect the admin-controlled P&L.
+| P&L is still calculated from the admin percentage.
+|
+*/
+
+    let exitPrice =
+        Number(
+            request.currentPrice ||
+            request.entryPrice ||
+            0
+        );
+
+    try {
+        const liveMarket =
+            await fetchStock(
+                request.symbol
+            );
+
+        const livePrice =
+            Number(
+                liveMarket?.price
+            );
+
+        if (
+            Number.isFinite(livePrice) &&
+            livePrice > 0
+        ) {
+            exitPrice =
+                livePrice;
+        }
+    } catch (error) {
+        /*
+        | If live price refresh fails, keep the latest
+        | stored market price instead of failing the SELL.
+        */
+    }
+
+    /*
     |--------------------------------------------------------------------------
     | Atomically claim the close
     |--------------------------------------------------------------------------
@@ -3122,10 +3270,15 @@ export async function sellMarketPosition(
             },
             {
                 $set: {
+                    currentPrice: exitPrice,
                     closedPercent: closingPercent,
                     closedPnl: closingPnl,
                     finalPnl: closingPnl,
-                    balanceAdjustment: closingPnl,
+                    balanceAdjustment:
+                        roundNumber(
+                            closingPnl -
+                            Number(request.fee || 0)
+                        ),
                     finalPercent: closingPercent,
                     closedAt,
                     settledAt: closedAt,
@@ -3184,10 +3337,16 @@ export async function sellMarketPosition(
     const oldBalance =
         getBalance(user);
 
+    const balanceAdjustment =
+        roundNumber(
+            closingPnl -
+            Number(request.fee || 0)
+        );
+
     const newBalance =
         roundNumber(
             oldBalance +
-            closingPnl
+            balanceAdjustment
         );
 
     user.balance =
@@ -3199,7 +3358,7 @@ export async function sellMarketPosition(
                 user.realizedTradingProfit ||
                 0
             ) +
-            closingPnl
+            balanceAdjustment
         );
 
     /*
