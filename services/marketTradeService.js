@@ -265,8 +265,8 @@ const MAX_LEVERAGE = {
 function validateLeverage(value, assetType) {
     const leverage =
         value === undefined ||
-        value === null ||
-        value === ""
+            value === null ||
+            value === ""
             ? 1
             : Number(value);
 
@@ -419,9 +419,9 @@ function validateLiveMarket(
 
             if (
                 currentMinutes <
-                    marketOpen ||
+                marketOpen ||
                 currentMinutes >
-                    marketClose
+                marketClose
             ) {
                 throw new Error(
                     "Market is currently closed."
@@ -715,16 +715,20 @@ function calculateProgressPercent(
         new Date(now).getTime();
 
     const duration =
-        expiresAt -
-        startedAt;
+        expiresAt - startedAt;
 
     const elapsed =
-        nowTime -
-        startedAt;
+        nowTime - startedAt;
 
     if (elapsed <= 0) {
         return 0;
     }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Expired
+    |--------------------------------------------------------------------------
+    */
 
     if (nowTime >= expiresAt) {
         return roundNumber(
@@ -734,12 +738,19 @@ function calculateProgressPercent(
     }
 
     /*
-    | Keep the final 5 seconds at the final percentage.
+    |--------------------------------------------------------------------------
+    | FINAL 5 SECOND LOCK
+    |--------------------------------------------------------------------------
+    |
+    | Once we enter the final 5 seconds, the Admin-set
+    | percentage becomes the permanent/final percentage.
+    |
     */
+
     const lockTime =
         expiresAt -
         MARKET_FINAL_LOCK_SECONDS *
-            1000;
+        1000;
 
     if (nowTime >= lockTime) {
         return roundNumber(
@@ -747,6 +758,20 @@ function calculateProgressPercent(
             8
         );
     }
+
+    /*
+    |--------------------------------------------------------------------------
+    | LIVE RANDOM FLUCTUATION
+    |--------------------------------------------------------------------------
+    |
+    | Before the final 5 seconds:
+    |
+    | - Percentage can be positive OR negative.
+    | - It changes continuously.
+    | - It gradually becomes more active as time passes.
+    | - It never exceeds the Admin final percentage range excessively.
+    |
+    */
 
     const progress =
         Math.min(
@@ -757,8 +782,91 @@ function calculateProgressPercent(
             )
         );
 
+    const absoluteFinal =
+        Math.abs(finalPercent);
+
+    /*
+    |--------------------------------------------------------------------------
+    | Random movement range
+    |--------------------------------------------------------------------------
+    |
+    | Give the fluctuation enough room to cross 0 and
+    | move between negative and positive values.
+    |
+    */
+
+    const minimumRange =
+        Math.max(
+            absoluteFinal * 0.75,
+            1
+        );
+
+    const maximumRange =
+        Math.max(
+            absoluteFinal * 1.25,
+            2
+        );
+
+    /*
+    |--------------------------------------------------------------------------
+    | Random percentage
+    |--------------------------------------------------------------------------
+    */
+
+    const randomValue =
+        (
+            Math.random() *
+            2
+        ) - 1;
+
+    let currentPercent =
+        randomValue *
+        (
+            minimumRange +
+            (
+                maximumRange -
+                minimumRange
+            ) *
+            progress
+        );
+
+    /*
+    |--------------------------------------------------------------------------
+    | Small tendency toward Admin result
+    |--------------------------------------------------------------------------
+    |
+    | As expiry approaches, movement gets closer to the
+    | Admin-controlled final result.
+    |
+    */
+
+    const finalInfluence =
+        Math.pow(
+            progress,
+            2
+        );
+
+    currentPercent =
+        (
+            currentPercent *
+            (1 - finalInfluence)
+        ) +
+        (
+            finalPercent *
+            finalInfluence
+        );
+
+    /*
+    |--------------------------------------------------------------------------
+    | Keep sign genuinely variable during active period
+    |--------------------------------------------------------------------------
+    |
+    | Do NOT force the sign to match Admin's final percentage.
+    |
+    */
+
     return roundNumber(
-        finalPercent * progress,
+        currentPercent,
         8
     );
 }
@@ -1204,14 +1312,14 @@ export async function createMarketRequest({
     const lotSize =
         Number(
             DEFAULT_LOT_SIZE[
-                assetType
+            assetType
             ] || 1
         );
 
     const resolvedLots =
         lots === undefined ||
-        lots === null ||
-        lots === ""
+            lots === null ||
+            lots === ""
             ? roundNumber(
                 validatedQuantity /
                 lotSize
@@ -1486,9 +1594,9 @@ export async function getUserMarketRequests(
     ) {
         if (
             request.status ===
-                "ACTIVE" ||
+            "ACTIVE" ||
             request.status ===
-                "LOCKED"
+            "LOCKED"
         ) {
             const currentPercent =
                 calculateProgressPercent(
@@ -1513,7 +1621,7 @@ export async function getUserMarketRequests(
                 if (
                     market &&
                     Number(market.price) >
-                        0
+                    0
                 ) {
                     request.currentPrice =
                         Number(
@@ -1636,9 +1744,9 @@ export async function getMarketRequest(
     */
     if (
         request.status ===
-            "ACTIVE" ||
+        "ACTIVE" ||
         request.status ===
-            "LOCKED"
+        "LOCKED"
     ) {
         await refreshMarketRequest(
             request
@@ -1671,9 +1779,9 @@ export async function refreshMarketRequest(
 
     if (
         request.status !==
-            "ACTIVE" &&
+        "ACTIVE" &&
         request.status !==
-            "LOCKED"
+        "LOCKED"
     ) {
         return request;
     }
@@ -1690,7 +1798,7 @@ export async function refreshMarketRequest(
     if (
         request.expiresAt &&
         request.adminPercent !==
-            null
+        null
     ) {
         const expiresAt =
             new Date(
@@ -1703,8 +1811,8 @@ export async function refreshMarketRequest(
 
         if (
             remaining <=
-                MARKET_FINAL_LOCK_SECONDS *
-                    1000
+            MARKET_FINAL_LOCK_SECONDS *
+            1000
         ) {
             request.finalPercent =
                 Number(
@@ -1747,7 +1855,7 @@ export async function refreshMarketRequest(
         if (
             market &&
             Number(market.price) >
-                0
+            0
         ) {
             request.currentPrice =
                 Number(
@@ -1931,9 +2039,9 @@ export async function getAdminMarketRequests({
     ) {
         if (
             request.status ===
-                "ACTIVE" ||
+            "ACTIVE" ||
             request.status ===
-                "LOCKED"
+            "LOCKED"
         ) {
             try {
                 await refreshMarketRequest(
@@ -2473,9 +2581,9 @@ export async function lockFinalPercent(
 
     if (
         request.adminPercent ===
-            null ||
+        null ||
         request.adminPercent ===
-            undefined
+        undefined
     ) {
         throw new Error(
             "Admin percentage has not been set."
@@ -2605,9 +2713,9 @@ export async function settleMarketTrade(
 
     if (
         request.status !==
-            "ACTIVE" &&
+        "ACTIVE" &&
         request.status !==
-            "LOCKED"
+        "LOCKED"
     ) {
         return {
             success: false,
@@ -2625,9 +2733,9 @@ export async function settleMarketTrade(
 
     if (
         request.finalPercent ===
-            null ||
+        null ||
         request.finalPercent ===
-            undefined
+        undefined
     ) {
         await lockFinalPercent(
             request._id
@@ -2915,9 +3023,9 @@ export async function sellMarketPosition(
 
     if (
         request.status !==
-            "ACTIVE" &&
+        "ACTIVE" &&
         request.status !==
-            "LOCKED"
+        "LOCKED"
     ) {
         throw new Error(
             `Market trade cannot be sold from status ${request.status}.`
@@ -2948,7 +3056,7 @@ export async function sellMarketPosition(
         if (
             remaining <=
             MARKET_FINAL_LOCK_SECONDS *
-                1000
+            1000
         ) {
             await lockFinalPercent(
                 request._id
@@ -2968,7 +3076,7 @@ export async function sellMarketPosition(
 
     const closingPercent =
         request.status ===
-        "LOCKED"
+            "LOCKED"
             ? Number(
                 request.finalPercent ??
                 request.adminPercent ??
@@ -3213,9 +3321,9 @@ export async function processMarketRequest(
 
     if (
         request.status ===
-            "SETTLED" ||
+        "SETTLED" ||
         request.status ===
-            "CLOSED"
+        "CLOSED"
     ) {
         return {
             success: true,
@@ -3309,7 +3417,7 @@ export async function processMarketRequest(
     if (
         remaining <=
         MARKET_FINAL_LOCK_SECONDS *
-            1000
+        1000
     ) {
         if (
             request.status ===
