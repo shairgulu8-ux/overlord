@@ -13,6 +13,14 @@ import {
     checkAllPositionsRisk,
 } from "../controllers/tradeController.js";
 
+import {
+    createMarketRequest,
+    sellMarketPosition,
+    getUserMarketRequests,
+    getUserActiveMarketPositions,
+    getUserMarketHistory,
+    getMarketRequest,
+} from "../services/marketTradeService.js";
 
 const router = express.Router();
 
@@ -33,7 +41,6 @@ const router = express.Router();
 //     "quantity": 5
 // }
 //
-
 
 router.post(
     "/buy",
@@ -58,7 +65,6 @@ router.post(
 // }
 //
 
-
 router.post(
     "/sell",
     sell
@@ -80,7 +86,6 @@ router.post(
 // GET /api/trade/position/EURUSD?username=yusuf
 //
 
-
 router.get(
     "/position/:symbol",
     position
@@ -98,15 +103,32 @@ router.get(
 // ?username=yusuf
 //
 
-
 router.get(
     "/positions",
     positions
 );
+
+
+// =====================================================
+// GET PENDING LIMIT ORDERS
+// =====================================================
+//
+// GET /api/trade/orders
+//
+// IMPORTANT:
+//
+// This endpoint remains for the existing LIMIT order system.
+//
+// New admin-controlled MARKET requests do NOT use this endpoint.
+// Therefore Market BUY requests will not appear in the normal
+// Pending Orders tab.
+//
+
 router.get(
     "/orders",
     pendingOrders
 );
+
 
 // =====================================================
 // CREATE TRADING ORDER
@@ -114,55 +136,14 @@ router.get(
 //
 // POST /api/trade/order
 //
-// Supports:
+// Existing endpoint retained.
 //
-// MARKET BUY
-// MARKET SELL
-// LIMIT BUY
-// LIMIT SELL
+// Supports the existing trading flow.
 //
-// FOREX
-// METAL
-// OIL
-// CRYPTO
-// INDEX
-// STOCK
+// MARKET requests are routed by tradeService into the new
+// MarketRequest workflow.
+// LIMIT requests continue through the existing LIMIT workflow.
 //
-// Leverage
-// Lots
-// Take Profit
-// Stop Loss
-//
-// MARKET example:
-//
-// {
-//     "username": "yusuf",
-//     "symbol": "EURUSD",
-//     "side": "BUY",
-//     "quantity": 10,
-//     "lots": 1,
-//     "leverage": 500,
-//     "orderType": "MARKET",
-//     "takeProfit": 1.18000,
-//     "stopLoss": 1.15000
-// }
-//
-// LIMIT example:
-//
-// {
-//     "username": "yusuf",
-//     "symbol": "EURUSD",
-//     "side": "BUY",
-//     "quantity": 10,
-//     "lots": 1,
-//     "leverage": 500,
-//     "orderType": "LIMIT",
-//     "price": 1.16500,
-//     "takeProfit": 1.18000,
-//     "stopLoss": 1.15000
-// }
-//
-
 
 router.post(
     "/order",
@@ -176,12 +157,8 @@ router.post(
 //
 // POST /api/trade/order/:orderId/execute
 //
-// Used by the backend execution layer after checking
-// the current market price.
+// Existing LIMIT execution endpoint.
 //
-// Also useful for testing manually.
-//
-
 
 router.post(
     "/order/:orderId/execute",
@@ -195,11 +172,8 @@ router.post(
 //
 // POST /api/trade/orders/execute-pending
 //
-// The backend scheduler/worker can call this repeatedly
-// to check whether pending LIMIT orders have reached
-// their requested price.
+// Existing LIMIT scheduler/worker endpoint.
 //
-
 
 router.post(
     "/orders/execute-pending",
@@ -213,15 +187,11 @@ router.post(
 //
 // POST /api/trade/position/:positionId/risk
 //
-// Checks the live Yahoo price against:
+// Existing normal-position TP/SL endpoint.
 //
-// Take Profit
-// Stop Loss
+// Market-controlled positions use marketTradeService instead
+// and should have takeProfit/stopLoss set to null.
 //
-// If TP or SL is triggered, the backend closes the
-// position and settles the wallet.
-//
-
 
 router.post(
     "/position/:positionId/risk",
@@ -235,16 +205,367 @@ router.post(
 //
 // POST /api/trade/positions/check-risk
 //
-// Checks all OPEN positions.
+// Existing normal-position risk endpoint.
 //
-// This endpoint is intended for the backend scheduler/
-// worker that periodically checks live market prices.
-//
-
 
 router.post(
     "/positions/check-risk",
     checkAllPositionsRisk
+);
+
+
+// =====================================================
+// ADMIN-CONTROLLED MARKET TRADE
+// =====================================================
+//
+// The following endpoints belong to the NEW Market system.
+//
+// Market BUY does NOT become a normal LIMIT pending order.
+//
+// It creates a MarketRequest with:
+//
+// PENDING
+//
+// Until Admin presses SET:
+//
+// P&L = +0.0000
+//
+// The frontend will show it outside the normal Pending tab.
+//
+// After Admin SET:
+//
+// PENDING → ACTIVE
+//
+// =====================================================
+
+
+// =====================================================
+// CREATE MARKET REQUEST
+// =====================================================
+//
+// POST /api/trade/market-request
+//
+// User presses BUY on stockdetails.tsx.
+//
+// Body:
+//
+// {
+//     "username": "yusuf",
+//     "symbol": "EURUSD",
+//     "side": "BUY",
+//     "quantity": 10,
+//     "lots": 1,
+//     "leverage": 500
+// }
+//
+// Response:
+//
+// MarketRequest
+//
+// status = PENDING
+//
+// No normal LIMIT Order is created.
+//
+
+router.post(
+    "/market-request",
+    async (req, res) => {
+        try {
+            const {
+                username,
+                symbol,
+                side = "BUY",
+                quantity,
+                lots,
+                leverage,
+            } = req.body || {};
+
+            const result =
+                await createMarketRequest({
+                    username,
+                    symbol,
+                    side,
+                    quantity,
+                    lots,
+                    leverage,
+                });
+
+            return res.status(201).json(
+                result
+            );
+        } catch (error) {
+            console.error(
+                "Create Market request error:",
+                error
+            );
+
+            return res.status(400).json({
+                success: false,
+                message:
+                    error.message ||
+                    "Unable to create Market request.",
+            });
+        }
+    }
+);
+
+
+// =====================================================
+// SELL / CLOSE MARKET POSITION
+// =====================================================
+//
+// POST /api/trade/market-request/:requestId/sell
+//
+// Body:
+//
+// {
+//     "username": "yusuf"
+// }
+//
+// User can sell an ACTIVE Market position before
+// the configured duration expires.
+//
+// The Market service calculates the current controlled
+// P&L and settles the balance.
+//
+
+router.post(
+    "/market-request/:requestId/sell",
+    async (req, res) => {
+        try {
+            const {
+                username,
+            } = req.body || {};
+
+            const result =
+                await sellMarketPosition(
+                    username,
+                    req.params.requestId
+                );
+
+            return res.json(
+                result
+            );
+        } catch (error) {
+            console.error(
+                "Sell Market position error:",
+                error
+            );
+
+            return res.status(400).json({
+                success: false,
+                message:
+                    error.message ||
+                    "Unable to sell Market position.",
+            });
+        }
+    }
+);
+
+
+// =====================================================
+// GET USER MARKET REQUESTS
+// =====================================================
+//
+// GET /api/trade/market-requests?username=yusuf
+//
+// Returns the user's MarketRequest records.
+//
+// Possible statuses:
+//
+// PENDING
+// ACTIVE
+// LOCKED
+// SETTLED
+// CLOSED
+//
+// IMPORTANT:
+//
+// positions.tsx can use this endpoint separately from
+// the normal /orders endpoint.
+//
+// Therefore a Market PENDING request does not need to
+// appear inside the normal Pending Orders tab.
+//
+
+router.get(
+    "/market-requests",
+    async (req, res) => {
+        try {
+            const {
+                username,
+                status,
+            } = req.query || {};
+
+            const result =
+                await getUserMarketRequests(
+                    username,
+                    {
+                        status,
+                    }
+                );
+
+            return res.json(
+                result
+            );
+        } catch (error) {
+            console.error(
+                "Get user Market requests error:",
+                error
+            );
+
+            return res.status(400).json({
+                success: false,
+                message:
+                    error.message ||
+                    "Unable to get Market requests.",
+            });
+        }
+    }
+);
+
+
+// =====================================================
+// GET USER ACTIVE MARKET POSITIONS
+// =====================================================
+//
+// GET /api/trade/market-positions?username=yusuf
+//
+// Used by positions.tsx.
+//
+// Only ACTIVE and LOCKED Market positions are returned.
+//
+// PENDING Market requests are NOT returned here as active
+// positions until Admin presses SET.
+//
+
+router.get(
+    "/market-positions",
+    async (req, res) => {
+        try {
+            const {
+                username,
+            } = req.query || {};
+
+            const result =
+                await getUserActiveMarketPositions(
+                    username
+                );
+
+            return res.json(
+                result
+            );
+        } catch (error) {
+            console.error(
+                "Get active Market positions error:",
+                error
+            );
+
+            return res.status(400).json({
+                success: false,
+                message:
+                    error.message ||
+                    "Unable to get active Market positions.",
+            });
+        }
+    }
+);
+
+
+// =====================================================
+// GET USER MARKET HISTORY
+// =====================================================
+//
+// GET /api/trade/market-history?username=yusuf
+//
+// Used by positions.tsx History.
+//
+// Completed Market trades:
+//
+// CLOSED
+// SETTLED
+//
+// are returned here.
+//
+// This means the request can disappear from Admin's active
+// Market list while still remaining available for user's
+// History.
+//
+
+router.get(
+    "/market-history",
+    async (req, res) => {
+        try {
+            const {
+                username,
+            } = req.query || {};
+
+            const result =
+                await getUserMarketHistory(
+                    username
+                );
+
+            return res.json(
+                result
+            );
+        } catch (error) {
+            console.error(
+                "Get Market history error:",
+                error
+            );
+
+            return res.status(400).json({
+                success: false,
+                message:
+                    error.message ||
+                    "Unable to get Market history.",
+            });
+        }
+    }
+);
+
+
+// =====================================================
+// GET SINGLE MARKET REQUEST
+// =====================================================
+//
+// GET /api/trade/market-request/:requestId?username=yusuf
+//
+// Used when positions.tsx needs to refresh one Market
+// request/position.
+//
+
+router.get(
+    "/market-request/:requestId",
+    async (req, res) => {
+        try {
+            const {
+                username,
+            } = req.query || {};
+
+            const result =
+                await getMarketRequest(
+                    req.params.requestId,
+                    username
+                );
+
+            return res.json(
+                result
+            );
+        } catch (error) {
+            console.error(
+                "Get Market request error:",
+                error
+            );
+
+            return res.status(400).json({
+                success: false,
+                message:
+                    error.message ||
+                    "Unable to get Market request.",
+            });
+        }
+    }
 );
 
 

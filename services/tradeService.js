@@ -1,7 +1,23 @@
 import User from "../models/User.js";
 import Position from "../models/Position.js";
 import Order from "../models/Order.js";
+import MarketRequest from "../models/MarketRequest.js";
 import { fetchStock } from "./yahooService.js";
+import {
+    createMarketRequest,
+    sellMarketPosition,
+    getUserMarketRequests,
+    getUserActiveMarketPositions,
+    getUserMarketHistory,
+    getMarketRequest,
+    getAdminMarketRequests,
+    setMarketResult,
+    lockFinalPercent,
+    settleMarketTrade,
+    processMarketRequest,
+    processAllMarketRequests,
+    cancelPendingMarketRequest,
+} from "./marketTradeService.js";
 
 /*
 |--------------------------------------------------------------------------
@@ -928,12 +944,82 @@ export async function createTradingOrder({
     price,
     takeProfit,
     stopLoss,
+    marketRequestId,
 }) {
     const normalizedUsername = normalizeUsername(username);
     const normalizedSymbol = normalizeSymbol(symbol);
     const normalizedSide = String(side || "").trim().toUpperCase();
     const normalizedOrderType =
         String(orderType || "MARKET").trim().toUpperCase();
+
+    /*
+    |--------------------------------------------------------------------------
+    | ADMIN-CONTROLLED MARKET FLOW
+    |--------------------------------------------------------------------------
+    |
+    | MARKET BUY is submitted to MarketRequest and waits for Admin SET.
+    | MARKET SELL closes an active MarketRequest.
+    | LIMIT continues through the existing legacy code below.
+    | TP/SL are therefore never used by the new Market workflow.
+    |--------------------------------------------------------------------------
+    */
+    if (normalizedOrderType === "MARKET") {
+        if (normalizedSide === "BUY") {
+            return await createMarketRequest({
+                username: normalizedUsername,
+                symbol: normalizedSymbol,
+                side: "BUY",
+                quantity,
+                lots,
+                leverage,
+            });
+        }
+
+        if (normalizedSide === "SELL") {
+            let resolvedMarketRequestId = marketRequestId || null;
+
+            if (!resolvedMarketRequestId) {
+                const user = await User.findOne({
+                    username: normalizedUsername,
+                });
+
+                if (!user) {
+                    throw new Error("User not found.");
+                }
+
+                const activeRequests = await MarketRequest.find({
+                    userId: user._id,
+                    symbol: normalizedSymbol,
+                    status: {
+                        $in: ["ACTIVE", "LOCKED"],
+                    },
+                })
+                    .sort({ createdAt: -1 })
+                    .limit(2);
+
+                if (activeRequests.length === 1) {
+                    resolvedMarketRequestId = activeRequests[0]._id;
+                } else if (activeRequests.length > 1) {
+                    throw new Error(
+                        "Multiple active Market trades found for this symbol. Please provide marketRequestId."
+                    );
+                }
+            }
+
+            if (!resolvedMarketRequestId) {
+                throw new Error(
+                    "Active Market trade not found. Please provide marketRequestId."
+                );
+            }
+
+            return await sellMarketPosition(
+                normalizedUsername,
+                resolvedMarketRequestId
+            );
+        }
+
+        throw new Error("Market side must be BUY or SELL.");
+    }
 
     if (!["BUY", "SELL"].includes(normalizedSide)) {
         throw new Error("Order side must be BUY or SELL.");
@@ -2134,3 +2220,24 @@ export async function getPendingOrders(username) {
         orders,
     };
 }
+
+/*
+|--------------------------------------------------------------------------
+| ADMIN-CONTROLLED MARKET SERVICE EXPORTS
+|--------------------------------------------------------------------------
+*/
+export {
+    createMarketRequest,
+    sellMarketPosition,
+    getUserMarketRequests,
+    getUserActiveMarketPositions,
+    getUserMarketHistory,
+    getMarketRequest,
+    getAdminMarketRequests,
+    setMarketResult,
+    lockFinalPercent,
+    settleMarketTrade,
+    processMarketRequest,
+    processAllMarketRequests,
+    cancelPendingMarketRequest,
+};

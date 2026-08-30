@@ -41,6 +41,10 @@ import depositRoutes from "./routes/depositRoutes.js";
 
 import { executePendingOrders } from "./services/tradeService.js";
 
+import {
+    startMarketTradeScheduler,
+} from "./jobs/marketTradeScheduler.js";
+
 
 const app = express();
 
@@ -368,9 +372,8 @@ app.listen(
         );
 
         console.log(
-            `🌍 Environment : ${
-                process.env.NODE_ENV ||
-                "development"
+            `🌍 Environment : ${process.env.NODE_ENV ||
+            "development"
             }`
         );
 
@@ -388,6 +391,14 @@ app.listen(
 
         console.log(
             "🔄 Automatic pending order execution started (1s interval)"
+        );
+
+
+        // Start Admin-controlled Market trade scheduler
+        startMarketTradeScheduler();
+
+        console.log(
+            "📊 Admin-controlled Market trade scheduler started"
         );
 
         console.log("");

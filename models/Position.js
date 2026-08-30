@@ -16,6 +16,7 @@ import mongoose from "mongoose";
 | - Take Profit / Stop Loss
 | - Unrealized / realized P&L
 | - Existing Block Trade positions
+| - Admin-controlled Market positions
 |
 | Existing fields are intentionally preserved so the current stock
 | trading / block-trade code does not lose its existing data.
@@ -229,6 +230,9 @@ const positionSchema = new mongoose.Schema(
         |
         | null means that the feature is not enabled for this position.
         |
+        | Existing fields are preserved for backward compatibility.
+        | New Market-controlled positions will keep these as null.
+        |
         */
 
         takeProfit: {
@@ -314,6 +318,110 @@ const positionSchema = new mongoose.Schema(
 
         /*
         |--------------------------------------------------------------------------
+        | Admin-Controlled Market Position
+        |--------------------------------------------------------------------------
+        |
+        | A Market position created through the new Market Request system
+        | is linked to a MarketRequest document.
+        |
+        | marketControlled = true
+        | means the position's P&L/result is controlled by the admin-set
+        | percentage and duration rather than normal TP/SL execution.
+        |
+        */
+
+        marketRequestId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "MarketRequest",
+            default: null,
+            index: true,
+        },
+
+        marketControlled: {
+            type: Boolean,
+            default: false,
+            index: true,
+        },
+
+        /*
+        | Percentage selected by the admin.
+        |
+        | Examples:
+        | +0.30
+        | -0.50
+        | +10
+        | -25
+        |
+        | This is stored as the numeric percentage value.
+        */
+        adminPercent: {
+            type: Number,
+            default: null,
+        },
+
+        /*
+        | When the admin presses SET.
+        */
+        marketStartedAt: {
+            type: Date,
+            default: null,
+        },
+
+        /*
+        | Exact time at which the configured Market duration expires.
+        */
+        marketExpiresAt: {
+            type: Date,
+            default: null,
+            index: true,
+        },
+
+        /*
+        | The moment the final admin percentage becomes locked.
+        | This is normally approximately 5 seconds before expiry.
+        */
+        marketLockedAt: {
+            type: Date,
+            default: null,
+        },
+
+        /*
+        | Final percentage that must be used when the Market trade settles.
+        */
+        marketFinalPercent: {
+            type: Number,
+            default: null,
+        },
+
+        /*
+        | Whether the Market position has already been financially settled.
+        |
+        | false = still active / not settled
+        | true  = balance settlement has already happened
+        */
+        marketSettled: {
+            type: Boolean,
+            default: false,
+            index: true,
+        },
+
+        /*
+        | Duration configured by the admin, stored in minutes.
+        |
+        | Examples:
+        | 15
+        | 30
+        | 60
+        | 120
+        */
+        marketDurationMinutes: {
+            type: Number,
+            default: null,
+            min: 0,
+        },
+
+        /*
+        |--------------------------------------------------------------------------
         | Block Trade Reference
         |--------------------------------------------------------------------------
         |
@@ -345,13 +453,19 @@ const positionSchema = new mongoose.Schema(
 |--------------------------------------------------------------------------
 |
 | Normal position:
-| userId + symbol + blockTradeId(null)
+| userId + symbol + blockTradeId(null) + marketRequestId(null)
 |
 | Block Trade position:
-| userId + symbol + blockTradeId(BlockTrade ID)
+| userId + symbol + blockTradeId(BlockTrade ID) + marketRequestId(null)
 |
-| Isse same user ke same symbol ki normal aur
-| Block Trade position alag documents ho sakti hain.
+| Admin-controlled Market position:
+| userId + symbol + marketRequestId(MarketRequest ID)
+|
+| Isse:
+| - existing normal position ka behaviour preserve hota hai
+| - Block Trade position separate rehti hai
+| - Market-controlled position existing normal position se conflict
+|   nahi karti
 |
 */
 
@@ -360,6 +474,7 @@ positionSchema.index(
         userId: 1,
         symbol: 1,
         blockTradeId: 1,
+        marketRequestId: 1,
     },
     {
         unique: true,
@@ -388,6 +503,29 @@ positionSchema.index({
 
 positionSchema.index({
     assetType: 1,
+    status: 1,
+});
+
+/*
+|--------------------------------------------------------------------------
+| Market Trade Query Indexes
+|--------------------------------------------------------------------------
+|
+| These indexes help the Market scheduler and Market service quickly
+| find active admin-controlled positions and positions approaching
+| their expiry time.
+|
+*/
+
+positionSchema.index({
+    marketControlled: 1,
+    status: 1,
+    marketExpiresAt: 1,
+});
+
+positionSchema.index({
+    userId: 1,
+    marketControlled: 1,
     status: 1,
 });
 
