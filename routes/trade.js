@@ -311,6 +311,77 @@ router.post(
 
 
 // =====================================================
+// CREATE MARKET TRADE (BUY / SELL)
+// =====================================================
+//
+// POST /api/trade/market-trade
+//
+// Opens a NEW admin-controlled Market trade.
+// This is intentionally separate from the existing
+// /market-request/:requestId/sell endpoint, which CLOSES
+// an existing Market position.
+//
+// =====================================================
+
+router.post(
+    "/market-trade",
+    async (req, res) => {
+        try {
+            const {
+                username,
+                symbol,
+                side = "BUY",
+                quantity,
+                lots,
+                leverage,
+            } = req.body || {};
+
+            const normalizedSide =
+                String(side || "BUY")
+                    .trim()
+                    .toUpperCase();
+
+            if (
+                normalizedSide !== "BUY" &&
+                normalizedSide !== "SELL"
+            ) {
+                return res.status(400).json({
+                    success: false,
+                    message:
+                        "Market trade side must be BUY or SELL.",
+                });
+            }
+
+            const result =
+                await createMarketRequest({
+                    username,
+                    symbol,
+                    side: normalizedSide,
+                    quantity,
+                    lots,
+                    leverage,
+                });
+
+            return res.status(201).json(result);
+
+        } catch (error) {
+            console.error(
+                "Create Market trade error:",
+                error
+            );
+
+            return res.status(400).json({
+                success: false,
+                message:
+                    error.message ||
+                    "Unable to create Market trade.",
+            });
+        }
+    }
+);
+
+
+// =====================================================
 // SELL / CLOSE MARKET POSITION
 // =====================================================
 //

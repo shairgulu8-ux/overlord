@@ -41,6 +41,20 @@ import {
 
 
 // ======================================================
+// DYNAMIC DURATION / PERCENTAGE UPDATES
+// ======================================================
+//
+// Admin edits are persisted by marketTradeService.js to the MarketRequest
+// (including expiresAt and the current admin/final percentage). The scheduler
+// intentionally remains a thin 1-second dispatcher, so the next processing
+// cycle automatically observes the updated values.
+//
+// No separate in-memory duration cache is used here. This prevents a stale
+// scheduler value from overriding an Admin edit.
+//
+// ======================================================
+
+// ======================================================
 // CONFIGURATION
 // ======================================================
 //

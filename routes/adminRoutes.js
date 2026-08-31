@@ -1,5 +1,8 @@
 import express from "express";
 
+import MarketRequest from "../models/MarketRequest.js";
+import Position from "../models/Position.js";
+
 import { protect } from "../middleware/auth.js";
 // Future:
 // import { adminProtect } from "../middleware/adminMiddleware.js";
@@ -32,6 +35,7 @@ import {
 import {
     getAdminMarketRequests,
     setMarketResult,
+    updateMarketResult,
 } from "../services/marketTradeService.js";
 
 const router = express.Router();
@@ -413,49 +417,95 @@ router.patch(
 
         try {
 
-            /*
-            |--------------------------------------------------------------------------
-            | Admin Input
-            |--------------------------------------------------------------------------
-            */
-
             const {
                 durationMinutes,
                 percent,
             } = req.body || {};
 
-
-            /*
-            |--------------------------------------------------------------------------
-            | Logged-in Admin ID
-            |--------------------------------------------------------------------------
-            |
-            | jwt.js -> { id: userId }
-            |
-            */
-
             const adminId =
                 req.user?.id;
 
+            /*
+             * Check current Market request status.
+             */
+            const request =
+                await MarketRequest.findById(
+                    req.params.id
+                );
+
+            if (!request) {
+                throw new Error(
+                    "Market request not found."
+                );
+            }
+
+            let result;
 
             /*
-            |--------------------------------------------------------------------------
-            | Set Market Trade
-            |--------------------------------------------------------------------------
-            */
+             * NEW REQUEST
+             *
+             * PENDING -> ACTIVE
+             *
+             * Position will be created.
+             */
+            if (
+                request.status ===
+                "PENDING"
+            ) {
 
-            const result =
-                await setMarketResult({
-                    requestId:
-                        req.params.id,
+                result =
+                    await setMarketResult({
+                        requestId:
+                            req.params.id,
 
-                    adminId,
+                        adminId,
 
-                    durationMinutes,
+                        durationMinutes,
 
-                    percent,
-                });
+                        percent,
+                    });
 
+            }
+
+            /*
+             * EXISTING TRADE
+             *
+             * ACTIVE / LOCKED -> EDIT
+             *
+             * Existing Position will be updated.
+             */
+            else if (
+                request.status ===
+                "ACTIVE" ||
+                request.status ===
+                "LOCKED"
+            ) {
+
+                result =
+                    await updateMarketResult({
+                        requestId:
+                            req.params.id,
+
+                        adminId,
+
+                        durationMinutes,
+
+                        percent,
+                    });
+
+            }
+
+            /*
+             * SETTLED / CLOSED
+             * cannot be edited.
+             */
+            else {
+
+                throw new Error(
+                    `Market request cannot be modified from status ${request.status}.`
+                );
+
+            }
 
             return res.json(
                 result
@@ -467,7 +517,6 @@ router.patch(
                 "Set Admin Market result error:",
                 error
             );
-
 
             return res.status(400).json({
                 success: false,

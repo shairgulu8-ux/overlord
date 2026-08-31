@@ -1296,9 +1296,9 @@ export async function createMarketRequest({
             .toUpperCase();
 
     /*
-    | New system is primarily a BUY request flow.
-    | We retain SELL in the model for compatibility, but opening
-    | Market requests from stockdetails should be BUY.
+    | Both BUY and SELL are valid opening Market Trade sides.
+    | BUY and SELL are kept as independent Market requests so the
+    | two frontend trade popups can create their own positions.
     */
     if (
         !["BUY", "SELL"].includes(
@@ -1337,6 +1337,7 @@ export async function createMarketRequest({
         await MarketRequest.findOne({
             userId: user._id,
             symbol: normalizedSymbol,
+            side: normalizedSide,
             status: {
                 $in: [
                     "PENDING",
@@ -2618,6 +2619,258 @@ export async function setMarketResult({
 
         wallet:
             walletResponse(user),
+    };
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| UPDATE MARKET RESULT — ADMIN
+|--------------------------------------------------------------------------
+|
+| Allows Admin to edit Duration + P&L percentage for an existing
+| ACTIVE / LOCKED Market Trade before the user closes it.
+|
+| IMPORTANT:
+| - PENDING requests should continue using setMarketResult().
+| - SETTLED / CLOSED requests can never be edited.
+| - Changing duration recalculates expiry from the original start time.
+| - If the new expiry is still in the future, the trade remains ACTIVE
+|   until the normal final 5-second lock window.
+| - If the new expiry is already inside the final 5 seconds, the trade is
+|   immediately LOCKED with the newly supplied percentage.
+| - The user's margin, fee, leverage, entry price and Order ID are never
+|   changed by this function.
+| - The user's balance is NOT changed by an edit. Settlement/close remains
+|   the only place where the final P&L and fee affect the wallet.
+|
+*/
+
+export async function updateMarketResult({
+    requestId,
+    adminId,
+    durationMinutes,
+    percent,
+}) {
+    if (!requestId) {
+        throw new Error(
+            "Market request ID is required."
+        );
+    }
+
+    if (!adminId) {
+        throw new Error(
+            "Admin ID is required."
+        );
+    }
+
+    const admin =
+        await User.findById(
+            adminId
+        );
+
+    if (!admin) {
+        throw new Error(
+            "Admin not found."
+        );
+    }
+
+    const duration =
+        validateDuration(
+            durationMinutes
+        );
+
+    const adminPercent =
+        validateAdminPercent(
+            percent
+        );
+
+    const request =
+        await MarketRequest.findById(
+            requestId
+        );
+
+    if (!request) {
+        throw new Error(
+            "Market request not found."
+        );
+    }
+
+    if (
+        request.status !== "ACTIVE" &&
+        request.status !== "LOCKED"
+    ) {
+        throw new Error(
+            `Market request cannot be edited from status ${request.status}.`
+        );
+    }
+
+    const now =
+        new Date();
+
+    /*
+    |--------------------------------------------------------------------------
+    | EDITED MARKET TRADE TIMING
+    |--------------------------------------------------------------------------
+    |
+    | Admin-entered duration starts from the moment of the edit.
+    |
+    | Example:
+    | Existing trade expired.
+    | Admin enters:
+    |     Duration = 10 minutes
+    |     P&L      = +20%
+    |
+    | New trade timing:
+    |     startedAt = NOW
+    |     expiresAt = NOW + 10 minutes
+    |
+    | This intentionally restarts the Market countdown.
+    |--------------------------------------------------------------------------
+    */
+
+    const startedAt =
+        now;
+
+    const newExpiresAt =
+        new Date(
+            now.getTime() +
+            duration * 60 * 1000
+        );
+
+    const remainingMs =
+        newExpiresAt.getTime() -
+        now.getTime();
+
+    request.durationMinutes =
+        duration;
+
+    request.expiresAt =
+        newExpiresAt;
+
+    request.adminPercent =
+        adminPercent;
+
+    request.setByAdminId =
+        admin._id;
+
+    request.setByAdminUsername =
+        admin.username || "";
+
+    /*
+    | Recalculate the lock state using the NEW duration.
+    | This also allows an already-LOCKED trade to be extended again.
+    */
+    if (
+        remainingMs <=
+        MARKET_FINAL_LOCK_SECONDS * 1000
+    ) {
+        request.finalPercent =
+            adminPercent;
+
+        request.lockedAt =
+            request.lockedAt || now;
+
+        request.status =
+            "LOCKED";
+    } else {
+        request.finalPercent =
+            null;
+
+        request.lockedAt =
+            null;
+
+        request.status =
+            "ACTIVE";
+    }
+
+    const currentPercent =
+        request.status === "LOCKED"
+            ? adminPercent
+            : calculateProgressPercent(
+                request,
+                now
+            );
+
+    const currentPnl =
+        calculatePnlFromPercent(
+            request.margin,
+            currentPercent
+        );
+
+    request.finalPnl =
+        null;
+
+    request.balanceAdjustment =
+        null;
+
+    /*
+    | Keep the connected Position perfectly synchronized with the edited
+    | Market request. No wallet settlement happens here.
+    */
+    if (request.positionId) {
+        const position =
+            await Position.findById(
+                request.positionId
+            );
+
+        if (position) {
+            position.adminPercent =
+                adminPercent;
+
+            position.marketDurationMinutes =
+                duration;
+
+            position.marketStartedAt =
+                startedAt;
+
+            position.marketExpiresAt =
+                newExpiresAt;
+
+            position.marketFinalPercent =
+                request.finalPercent;
+
+            position.marketLockedAt =
+                request.lockedAt;
+
+            position.profitLoss =
+                currentPnl;
+
+            position.profitLossPercent =
+                currentPercent;
+
+            position.unrealizedPnl =
+                currentPnl;
+
+            position.unrealizedPnlPercent =
+                currentPercent;
+
+            position.lastPriceUpdated =
+                now;
+
+            await position.save();
+        }
+    }
+
+    await request.save();
+
+    return {
+        success: true,
+        message:
+            "Market trade duration and P&L updated successfully.",
+        request:
+            marketRequestResponse(
+                request
+            ),
+        position:
+            request.positionId
+                ? positionResponse(
+                    await Position.findById(
+                        request.positionId
+                    ),
+                    request
+                )
+                : null,
     };
 }
 
@@ -3976,6 +4229,8 @@ export default {
     getAdminMarketRequests,
 
     setMarketResult,
+
+    updateMarketResult,
 
     lockFinalPercent,
 
