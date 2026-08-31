@@ -67,6 +67,175 @@ const MARKET_FINAL_LOCK_SECONDS = 5;
 
 /*
 |--------------------------------------------------------------------------
+| Market Price Cache + In-Flight Request Deduplication
+|--------------------------------------------------------------------------
+|
+| PERFORMANCE FIX:
+|
+| Multiple Admin/User tabs viewing the same symbol used to each trigger
+| their own fetchStock() call for live display refresh. Under load
+| (many tabs, many ACTIVE/LOCKED MarketRequests sharing a symbol) this
+| multiplied external market-API requests unnecessarily.
+|
+| This cache is ONLY for display/live-refresh reads (background
+| scheduler refreshMarketRequest()). It is intentionally NOT used for
+| order execution (createMarketRequest, setMarketResult, sellMarketPosition)
+| — those still call fetchStock() directly so execution price accuracy
+| is unaffected.
+|
+| Behavior:
+| - A price fetched within MARKET_PRICE_CACHE_TTL_MS is reused as-is.
+| - If a fetch for a symbol is already in-flight, concurrent callers
+|   reuse that same Promise instead of firing duplicate requests.
+|
+*/
+
+const MARKET_PRICE_CACHE_TTL_MS = 3000;
+
+const marketPriceCache = new Map();
+const marketPriceInFlight = new Map();
+
+async function getCachedMarketPrice(symbol) {
+    const key = String(symbol || "")
+        .trim()
+        .toUpperCase();
+
+    if (!key) {
+        return null;
+    }
+
+    const now = Date.now();
+
+    const cached =
+        marketPriceCache.get(key);
+
+    if (
+        cached &&
+        (now - cached.timestamp) <
+        MARKET_PRICE_CACHE_TTL_MS
+    ) {
+        return cached.market;
+    }
+
+    const existingInFlight =
+        marketPriceInFlight.get(key);
+
+    if (existingInFlight) {
+        return existingInFlight;
+    }
+
+    const fetchPromise = (async () => {
+        try {
+            const market =
+                await fetchStock(key);
+
+            marketPriceCache.set(key, {
+                market,
+                timestamp: Date.now(),
+            });
+
+            return market;
+        } finally {
+            marketPriceInFlight.delete(key);
+        }
+    })();
+
+    marketPriceInFlight.set(
+        key,
+        fetchPromise
+    );
+
+    return fetchPromise;
+}
+
+
+/*
+|--------------------------------------------------------------------------
+| Bounded Concurrency Runner
+|--------------------------------------------------------------------------
+|
+| PERFORMANCE FIX:
+|
+| The background scheduler must not process hundreds of MarketRequests
+| strictly one-by-one (too slow), nor with unlimited Promise.all (can
+| overwhelm the external market API / DB with a burst of concurrent
+| requests). This runs a bounded pool of workers instead.
+|
+| One slow/failed item never blocks the others, and a per-item failure
+| is caught and reported instead of stopping the whole batch.
+|
+*/
+
+async function runWithConcurrencyLimit(
+    items,
+    limit,
+    worker
+) {
+    const results =
+        new Array(items.length);
+
+    let cursor = 0;
+
+    async function runNext() {
+        while (true) {
+            const currentIndex =
+                cursor++;
+
+            if (
+                currentIndex >=
+                items.length
+            ) {
+                return;
+            }
+
+            try {
+                results[currentIndex] =
+                    await worker(
+                        items[currentIndex],
+                        currentIndex
+                    );
+            } catch (error) {
+                results[currentIndex] = {
+                    success: false,
+                    processed: false,
+                    requestId:
+                        items[currentIndex]?._id,
+                    error:
+                        error.message,
+                };
+            }
+        }
+    }
+
+    const workerCount =
+        Math.max(
+            1,
+            Math.min(
+                limit,
+                items.length
+            )
+        );
+
+    const workers = [];
+
+    for (
+        let i = 0;
+        i < workerCount;
+        i++
+    ) {
+        workers.push(
+            runNext()
+        );
+    }
+
+    await Promise.all(workers);
+
+    return results;
+}
+
+
+/*
+|--------------------------------------------------------------------------
 | Generic Helpers
 |--------------------------------------------------------------------------
 */
@@ -1667,102 +1836,37 @@ export async function getUserMarketRequests(
                 .toUpperCase();
     }
 
-    const requests =
-        await MarketRequest.find(
-            query
-        ).sort({
-            createdAt: -1,
-        });
-
     /*
     |--------------------------------------------------------------------------
-    | Update live controlled P&L for ACTIVE / LOCKED requests
+    | PERFORMANCE FIX — FAST READ-ONLY PATH
+    |--------------------------------------------------------------------------
+    |
+    | This used to loop over every ACTIVE/LOCKED request and, per request,
+    | call fetchStock() plus Position.save() and MarketRequest.save() —
+    | synchronously, inside the GET response path. With multiple user
+    | tabs/sessions open on the same symbols, that multiplied external
+    | market-API requests and MongoDB writes on every poll.
+    |
+    | The background scheduler (processAllMarketRequests ->
+    | processMarketRequest -> refreshMarketRequest) already keeps
+    | currentPrice / P&L / lock state fresh independently of how many
+    | tabs are open. This GET is now a plain DB read; currentPercent and
+    | currentPnl are derived from stored timestamps by
+    | marketRequestResponse() below, with no external calls and no writes.
+    |
+    | .lean() is safe here because this list is read-only.
+    |
     |--------------------------------------------------------------------------
     */
 
-    for (
-        const request
-        of requests
-    ) {
-        if (
-            request.status ===
-            "ACTIVE" ||
-            request.status ===
-            "LOCKED"
-        ) {
-            const currentPercent =
-                calculateProgressPercent(
-                    request
-                );
-
-            const currentPnl =
-                calculatePnlFromPercent(
-                    request.margin,
-                    currentPercent,
-                    request.fee
-                );
-
-            /*
-            | Keep request's current price synced when possible.
-            */
-            try {
-                const market =
-                    await fetchStock(
-                        request.symbol
-                    );
-
-                if (
-                    market &&
-                    Number(market.price) >
-                    0
-                ) {
-                    request.currentPrice =
-                        Number(
-                            market.price
-                        );
-                }
-            } catch (error) {
-                console.error(
-                    `Market price refresh failed for ${request.symbol}:`,
-                    error
-                );
-            }
-
-            /*
-            | Update the connected Position too.
-            */
-            if (request.positionId) {
-                const position =
-                    await Position.findById(
-                        request.positionId
-                    );
-
-                if (position) {
-                    position.currentPrice =
-                        request.currentPrice;
-
-                    position.profitLoss =
-                        currentPnl;
-
-                    position.profitLossPercent =
-                        currentPercent;
-
-                    position.unrealizedPnl =
-                        currentPnl;
-
-                    position.unrealizedPnlPercent =
-                        currentPercent;
-
-                    position.lastPriceUpdated =
-                        new Date();
-
-                    await position.save();
-                }
-            }
-
-            await request.save();
-        }
-    }
+    const requests =
+        await MarketRequest.find(
+            query
+        )
+            .sort({
+                createdAt: -1,
+            })
+            .lean();
 
     return {
         success: true,
@@ -1821,28 +1925,29 @@ export async function getMarketRequest(
             user._id;
     }
 
+    /*
+    |--------------------------------------------------------------------------
+    | PERFORMANCE FIX — FAST READ-ONLY PATH
+    |--------------------------------------------------------------------------
+    |
+    | This used to synchronously call refreshMarketRequest() (external
+    | fetchStock() + Position.save() + MarketRequest.save()) on every GET
+    | of a single request. The background scheduler already keeps
+    | currentPrice / P&L / lock state fresh; this GET now just reads the
+    | latest stored state, with currentPercent/currentPnl derived from
+    | stored timestamps by marketRequestResponse() below.
+    |
+    |--------------------------------------------------------------------------
+    */
+
     const request =
         await MarketRequest.findOne(
             query
-        );
+        ).lean();
 
     if (!request) {
         throw new Error(
             "Market request not found."
-        );
-    }
-
-    /*
-    | Refresh live controlled P&L.
-    */
-    if (
-        request.status ===
-        "ACTIVE" ||
-        request.status ===
-        "LOCKED"
-    ) {
-        await refreshMarketRequest(
-            request
         );
     }
 
@@ -1940,8 +2045,16 @@ export async function refreshMarketRequest(
     */
 
     try {
+        /*
+        | PERFORMANCE FIX:
+        |
+        | Uses the shared cache/in-flight-dedup wrapper instead of
+        | calling fetchStock() directly, so multiple MarketRequests on
+        | the same symbol (or overlapping scheduler ticks) do not each
+        | trigger their own external market-price request.
+        */
         const market =
-            await fetchStock(
+            await getCachedMarketPrice(
                 request.symbol
             );
 
@@ -2048,7 +2161,9 @@ export async function getAdminMarketRequests({
     const admin =
         await User.findById(
             adminId
-        );
+        )
+            .select("_id")
+            .lean();
 
     if (!admin) {
         throw new Error(
@@ -2116,38 +2231,38 @@ export async function getAdminMarketRequests({
         };
     }
 
+    /*
+    |--------------------------------------------------------------------------
+    | PERFORMANCE FIX — FAST READ-ONLY PATH
+    |--------------------------------------------------------------------------
+    |
+    | This endpoint used to synchronously call refreshMarketRequest() (an
+    | external fetchStock() call PLUS a Position.save() and a
+    | MarketRequest.save()) for every ACTIVE/LOCKED request on every single
+    | Admin GET. With multiple Admin tabs/users open, that multiplied
+    | external market-API requests and MongoDB writes on every poll.
+    |
+    | Admin GET is now a plain DB read. currentPrice / P&L / lock-state are
+    | kept fresh by the background scheduler (processAllMarketRequests ->
+    | processMarketRequest -> refreshMarketRequest), which already runs
+    | independently of how many tabs are open. remainingMs/remainingSeconds
+    | and currentPercent/currentPnl are derived from stored timestamps in
+    | marketRequestResponse() below, with no external calls and no writes.
+    |
+    | .lean() is safe here because this list is read-only and is never
+    | saved back.
+    |
+    |--------------------------------------------------------------------------
+    */
+
     const requests =
         await MarketRequest.find(
             query
-        ).sort({
-            createdAt: -1,
-        });
-
-    /*
-    | Refresh active requests so Admin sees current P&L and remaining time.
-    */
-    for (
-        const request
-        of requests
-    ) {
-        if (
-            request.status ===
-            "ACTIVE" ||
-            request.status ===
-            "LOCKED"
-        ) {
-            try {
-                await refreshMarketRequest(
-                    request
-                );
-            } catch (error) {
-                console.error(
-                    `Failed to refresh admin Market request ${request._id}:`,
-                    error
-                );
-            }
-        }
-    }
+        )
+            .sort({
+                createdAt: -1,
+            })
+            .lean();
 
     return {
         success: true,
@@ -2744,6 +2859,18 @@ export async function updateMarketResult({
 
     request.durationMinutes =
         duration;
+
+    /*
+    | BUG FIX:
+    |
+    | startedAt must also restart to NOW, not just expiresAt.
+    | calculateProgressPercent() derives `duration` and `elapsed` from
+    | (expiresAt - startedAt) and (now - startedAt). Leaving the OLD
+    | startedAt in place while moving expiresAt forward silently
+    | corrupts the live progress/duration math for the edited trade.
+    */
+    request.startedAt =
+        startedAt;
 
     request.expiresAt =
         newExpiresAt;
@@ -3883,6 +4010,19 @@ export async function processMarketRequest(
 |
 */
 
+/*
+| PERFORMANCE FIX:
+|
+| Bounded concurrency for the scheduler tick. Processing hundreds of
+| MarketRequests strictly one-by-one is slow; unlimited Promise.all can
+| burst-overload the external market API / MongoDB. A small configurable
+| pool size keeps throughput reasonable without either extreme.
+*/
+const MAX_CONCURRENT_MARKET_REFRESHES =
+    Number(
+        process.env.MAX_CONCURRENT_MARKET_REFRESHES
+    ) || 4;
+
 export async function processAllMarketRequests() {
     const requests =
         await MarketRequest.find({
@@ -3892,38 +4032,44 @@ export async function processAllMarketRequests() {
                     "LOCKED",
                 ],
             },
-        }).sort({
-            expiresAt: 1,
-        });
+        })
+            .sort({
+                expiresAt: 1,
+            })
+            .select("_id")
+            .lean();
 
-    const results = [];
+    /*
+    | Bounded-concurrency processing. One slow symbol/request no longer
+    | blocks every other MarketRequest, and a per-item failure (already
+    | caught inside runWithConcurrencyLimit) never stops the batch.
+    */
+    const results =
+        await runWithConcurrencyLimit(
+            requests,
+            MAX_CONCURRENT_MARKET_REFRESHES,
+            async (request) => {
+                try {
+                    return await processMarketRequest(
+                        request._id
+                    );
+                } catch (error) {
+                    console.error(
+                        `Market request ${request._id} processing failed:`,
+                        error
+                    );
 
-    for (
-        const request
-        of requests
-    ) {
-        try {
-            results.push(
-                await processMarketRequest(
-                    request._id
-                )
-            );
-        } catch (error) {
-            console.error(
-                `Market request ${request._id} processing failed:`,
-                error
-            );
-
-            results.push({
-                success: false,
-                processed: false,
-                requestId:
-                    request._id,
-                error:
-                    error.message,
-            });
-        }
-    }
+                    return {
+                        success: false,
+                        processed: false,
+                        requestId:
+                            request._id,
+                        error:
+                            error.message,
+                    };
+                }
+            }
+        );
 
     return {
         success: true,
@@ -3961,6 +4107,20 @@ export async function getUserActiveMarketPositions(
         );
     }
 
+    /*
+    |--------------------------------------------------------------------------
+    | PERFORMANCE FIX — FAST READ-ONLY PATH + BATCHED POSITION LOOKUP
+    |--------------------------------------------------------------------------
+    |
+    | This used to refresh every request one-by-one (external fetchStock()
+    | + saves) and then re-query MarketRequest a second time, followed by
+    | a Position.findById() per request in a loop. The background
+    | scheduler already keeps requests fresh, and position lookups are
+    | now batched into a single query.
+    |
+    |--------------------------------------------------------------------------
+    */
+
     const requests =
         await MarketRequest.find({
             userId:
@@ -3972,54 +4132,56 @@ export async function getUserActiveMarketPositions(
                     "LOCKED",
                 ],
             },
-        }).sort({
-            createdAt: -1,
-        });
+        })
+            .sort({
+                createdAt: -1,
+            })
+            .lean();
 
-    for (
-        const request
-        of requests
-    ) {
-        try {
-            await refreshMarketRequest(
-                request
-            );
-        } catch (error) {
-            console.error(
-                `Failed to refresh Market position ${request._id}:`,
-                error
-            );
-        }
-    }
+    const positionIds =
+        requests
+            .map(
+                (request) =>
+                    request.positionId
+            )
+            .filter(Boolean);
 
-    const freshRequests =
-        await MarketRequest.find({
-            userId:
-                user._id,
+    const positionDocs =
+        positionIds.length
+            ? await Position.find({
+                _id: {
+                    $in: positionIds,
+                },
+            }).lean()
+            : [];
 
-            status: {
-                $in: [
-                    "ACTIVE",
-                    "LOCKED",
-                ],
-            },
-        }).sort({
-            createdAt: -1,
-        });
+    const positionsById =
+        new Map(
+            positionDocs.map(
+                (position) => [
+                    String(
+                        position._id
+                    ),
+                    position,
+                ]
+            )
+        );
 
     const positions = [];
 
     for (
         const request
-        of freshRequests
+        of requests
     ) {
         if (!request.positionId) {
             continue;
         }
 
         const position =
-            await Position.findById(
-                request.positionId
+            positionsById.get(
+                String(
+                    request.positionId
+                )
             );
 
         if (!position) {
@@ -4081,6 +4243,9 @@ export async function getUserMarketHistory(
         );
     }
 
+    /*
+    | Read-only list — .lean() is safe, nothing here is saved back.
+    */
     const requests =
         await MarketRequest.find({
             userId:
@@ -4092,11 +4257,13 @@ export async function getUserMarketHistory(
                     "SETTLED",
                 ],
             },
-        }).sort({
-            settledAt: -1,
-            closedAt: -1,
-            createdAt: -1,
-        });
+        })
+            .sort({
+                settledAt: -1,
+                closedAt: -1,
+                createdAt: -1,
+            })
+            .lean();
 
     return {
         success: true,
