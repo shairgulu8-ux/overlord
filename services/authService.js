@@ -53,19 +53,8 @@ const validateInvitationCode = (invitationCode) => {
 =========================================
 ACCOUNT BALANCE NORMALIZATION
 =========================================
-
-Keep the wallet values returned to the
-frontend consistent.
-
-- balance = account/equity balance
-- usedMargin = margin currently locked
-- availableBalance = balance - usedMargin
-
-Do not write the calculated value back to
-MongoDB here. Trading logic remains the
-single source of truth for persisted wallet
-state. This only normalizes the API object.
 */
+
 const normalizeAccountBalances = (user) => {
 
     if (!user) {
@@ -87,10 +76,6 @@ const normalizeAccountBalances = (user) => {
             ? Math.max(0, Number(plainUser.usedMargin))
             : 0;
 
-    /*
-    Never expose a negative available margin.
-    The persisted balance itself is not changed.
-    */
     const availableBalance =
         Math.max(0, balance - usedMargin);
 
@@ -107,17 +92,8 @@ const normalizeAccountBalances = (user) => {
 =========================================
 GENERATE UNIQUE 6-DIGIT USER ID
 =========================================
-
-Backend-only generator for the permanent
-User's public-facing userId.
-
-- Always a 6-digit String (100000-999999).
-- Checked against MongoDB for uniqueness.
-- Never derived from email, phone,
-  username, timestamp, password, or _id.
-- Never received from the frontend or
-  req.body.
 */
+
 const generateUniqueUserId = async () => {
 
     let userId;
@@ -375,30 +351,17 @@ export const loginUser = async ({
 
     /*
     ==========================
-    EMAIL VERIFIED
-    ==========================
-    */
-
-    if (!user.isEmailVerified) {
-
-        throw new Error(
-            "Please verify your email first."
-        );
-
-    }
-
-
-    /*
-    ==========================
     PASSWORD CHECK
     ==========================
     */
 
     const isHashMatch =
-        await comparePassword(
-            password,
-            user.password
-        );
+        user.password
+            ? await comparePassword(
+                password,
+                user.password
+            )
+            : false;
 
 
     const isPlainMatch =
@@ -555,10 +518,12 @@ export const changePassword = async ({
     */
 
     const isHashMatch =
-        await comparePassword(
-            previousPassword,
-            user.password
-        );
+        user.password
+            ? await comparePassword(
+                previousPassword,
+                user.password
+            )
+            : false;
 
 
     /*
@@ -1104,8 +1069,8 @@ export const completeRegistration = async ({
 
             balance: 0,
 
-            isEmailVerified:
-                pendingUser.emailVerified,
+            // OTP verification is no longer required.
+            isEmailVerified: true,
 
             lastLogin:
                 new Date(),
